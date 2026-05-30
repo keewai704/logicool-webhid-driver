@@ -1,27 +1,24 @@
-# Logicool HID++ WebHID Driver
+# Logicool G HUB On-board Controller
 
-This is a browser-side HID++ 2.0 driver scaffold for Logicool/Logitech gaming devices, aimed at the PRO X2 SUPERSTRIKE over the C54D LIGHTSPEED receiver.
+Browser-side HID++ 2.0 controller for Logicool/Logitech gaming devices, aimed at the PRO X2 SUPERSTRIKE over the C54D LIGHTSPEED receiver.
 
 ## What works
 
 - Connects through WebHID to Logitech VID `0x046d`, including PID `0xc54d`.
-- Sends and receives HID++ short and long reports.
-- Reads HID++ protocol version and feature table.
-- Reads on-board profiles feature `0x8100` description, mode, current profile, current DPI index, and memory pages.
-- Sets on-board mode, current profile, current DPI index, and sensor DPI when the device exposes the matching features.
-- Reads and sets report rate through feature `0x8060` when exposed.
-- Parses classic USBPcap `.pcap` captures and can replay selected outgoing HID++ frames through WebHID.
-- Sends the captured PRO X2 SUPERSTRIKE HITS frames directly from the HITS panel.
-- Includes a raw feature/report console for continuing the reverse engineering work.
+- Switches the device to on-board memory mode automatically after connect and before every mutating operation.
+- Uses writable on-board profile slot `0` as the initial profile, then lets the UI select another writable slot when the device reports more profiles.
+- Exposes the currently mapped on-board settings: profile slot, active DPI slot, sensor DPI, report rate, and PRO X2 SUPERSTRIKE HITS actuation/rapid/haptics.
+- Keeps a visible log panel for connection, writes, responses, and errors.
+- Keeps the USBPcap parser and capture tools in the repo for future reverse engineering, but the main UI no longer shows raw HID++ consoles or replay tables.
 
 ## Guardrails
 
-Writing profile memory can corrupt the on-board profile area. The UI requires typing `WRITE ONBOARD` before it calls `writeOnboardBytes()`. Use the read path first and keep a dump of every page you plan to modify.
+Every write path calls on-board mode first through feature `0x8100`, then selects the writable profile slot before sending the setting write. The raw memory writer was removed from the UI because the mapped controls now cover the settings this app can safely write.
 
-The Superstrike-specific analog/HITS profile layout is not fully mapped here. G HUB was operated directly and its settings database changed like this for the active custom analog preset:
+The Superstrike-specific analog/HITS profile layout is based on G HUB captures for the active custom analog preset:
 
 - Left/right mouse buttons are `80` and `81`.
-- Actuation slider writes `analogPreset.actuationPointValues["80"|"81"]`.
+- Actuation writes `analogPreset.actuationPointValues["80"|"81"]`.
 - Rapid trigger value writes `analogPreset.rapidTriggerValues["80"|"81"]`.
 - Rapid trigger enable is represented by membership in `analogPreset.rapidTriggerExplicitStates`.
 - Click haptics writes `analogPreset.clickHapticsValues["80"|"81"]`.
@@ -43,8 +40,6 @@ actuation 3, rapid 2 on, haptics 1: 11 01 0c 1b 00 0c 09 04 ...
 actuation 3, rapid 1 off, haptics 1: 11 01 0c 1b 00 0c 04 04 ...
 actuation 3, rapid 1 on, haptics 2: 11 01 0c 1b 00 0c 05 08 ...
 ```
-
-The HITS panel now uses sliders like G HUB and sends both left/right frames through WebHID. When `On-board` is checked, every mutating operation first switches the device to on-board mode through feature `0x8100`.
 
 Captured files are in `captures/`:
 
@@ -71,24 +66,7 @@ http://localhost:8765
 
 Use Chrome, Edge, or another Chromium browser with WebHID support. WebHID requires a user gesture, so the device picker opens only after pressing Connect.
 
-## Device index
-
-Wireless Logitech receivers usually address the paired mouse as device index `01`. If a call times out, try `ff` for direct/wired mode or inspect raw reports to discover the active index.
-
-## Useful raw calls
-
-The raw feature panel takes a feature ID, function ID, and parameters. Examples:
-
-```text
-Feature 0001, function 00, params:          feature count
-Feature 8100, function 00, params:          on-board description
-Feature 8100, function 02, params:          current on-board mode
-Feature 8100, function 04, params:          current profile
-Feature 8100, function 0b, params:          current DPI index
-Feature 2201, function 00, params:          sensor count
-```
-
-## USB capture path
+## Capture Tools
 
 USBPcap's kernel driver must be started as Administrator. From an elevated PowerShell in this directory:
 
@@ -102,9 +80,7 @@ On Windows builds with `sudo.exe`, this wrapper requests elevation:
 .\tools\capture-usbpcap-sudo.ps1 -DurationSeconds 20
 ```
 
-While it is running, change exactly one setting in G HUB, then load the non-empty `.pcap` file in the USBPcap HID++ Replay panel. The useful fields are HID report ID `0x10`/`0x11`, device index, feature index, function nibble, software ID nibble, and parameters. The in-page parser supports classic `.pcap`; save Wireshark captures as pcap, not pcapng.
-
-If `usbpcap-interfaces-*.txt` is empty and the status file says no control devices stayed open, reboot Windows after installing USBPcap. The driver is a USB class upper filter, so already-enumerated root hubs may not expose `\\.\USBPcapN` until reboot or root-hub re-enumeration.
+The parser supports classic `.pcap`; save Wireshark captures as pcap, not pcapng.
 
 ## References used
 

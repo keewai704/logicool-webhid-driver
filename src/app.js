@@ -6,19 +6,20 @@ import {
   LogitechHidpp20Driver,
   bytesToHex,
   hex,
-  parseHexBytes,
 } from "./logitech-hidpp.js";
-import { parsePcap, summarizeFrames } from "./pcap-hidpp.js";
 
 const $ = (selector) => document.querySelector(selector);
+
+const DEFAULT_DEVICE_INDEX = 0x01;
+const DEFAULT_PROFILE_INDEX = 0;
+const DEFAULT_DPI_SLOT = 0;
+const DEFAULT_DPI_SLOT_COUNT = 5;
 
 const state = {
   driver: null,
   unsubscribe: null,
   features: [],
-  lastSector: null,
-  pcapFrames: [],
-  selectedReplayFrames: [],
+  onboardDescription: null,
   dpiSensors: [],
   reportRates: [],
 };
@@ -28,12 +29,6 @@ const SUPERSTRIKE_HITS_MODEL = Object.freeze({
     left: 80,
     right: 81,
   },
-  observedSettingsKeys: {
-    actuation: "analogPreset.actuationPointValues[buttonId]",
-    rapidTriggerEnabled: "analogPreset.rapidTriggerExplicitStates includes buttonId",
-    rapidTrigger: "analogPreset.rapidTriggerValues[buttonId]",
-    clickHaptics: "analogPreset.clickHapticsValues[buttonId]",
-  },
   capturedHidpp: {
     featureIndex: "0x0c",
     functionId: "0x1",
@@ -41,6 +36,16 @@ const SUPERSTRIKE_HITS_MODEL = Object.freeze({
     hitsTemplate: "11 01 0c 1b <side:00|01> <actuation*4> <rapid*4+enabled> <haptics*4> 00...",
   },
 });
+
+function clamp(value, min, max) {
+  return Math.min(max, Math.max(min, value));
+}
+
+function setOutput(selector, value) {
+  const el = $(selector);
+  el.value = String(value);
+  el.textContent = String(value);
+}
 
 function hitsButtonsForTarget() {
   const target = $("#hitsTarget").value;
@@ -54,6 +59,13 @@ function hitsSideIndexesForTarget() {
   if (target === "left") return [0];
   if (target === "right") return [1];
   return [0, 1];
+}
+
+function hitsTargetLabel() {
+  const target = $("#hitsTarget").value;
+  if (target === "left") return "LEFT";
+  if (target === "right") return "RIGHT";
+  return "LEFT + RIGHT";
 }
 
 function buildHitsSettingsPatch() {
@@ -80,7 +92,7 @@ function buildCapturedHitsPayload(sideIndex) {
   const haptics = Number($("#hitsHaptics").value);
   const payload = new Uint8Array(19);
   payload.set([
-    0x01,
+    DEFAULT_DEVICE_INDEX,
     0x0c,
     0x1b,
     sideIndex & 0xff,
@@ -96,18 +108,14 @@ function hitsPreviewFrames() {
 }
 
 function renderHitsModel() {
-  $("#hitsActuationValue").value = $("#hitsActuation").value;
-  $("#hitsRapidValue").value = $("#hitsRapid").value;
-  $("#hitsHapticsValue").value = $("#hitsHaptics").value;
-  $("#hitsModel").textContent = JSON.stringify(
-    {
-      observedInGHub: SUPERSTRIKE_HITS_MODEL,
-      requestedPatch: buildHitsSettingsPatch(),
-      outgoingReports: hitsPreviewFrames(),
-    },
-    null,
-    2,
-  );
+  const actuation = $("#hitsActuation").value;
+  const rapid = $("#hitsRapid").value;
+  const haptics = $("#hitsHaptics").value;
+  setOutput("#hitsActuationValue", actuation);
+  setOutput("#hitsRapidValue", rapid);
+  setOutput("#hitsHapticsValue", haptics);
+  $("#hitsSummary").textContent = `${hitsTargetLabel()} / RT ${$("#hitsRapidEnabled").checked ? "ON" : "OFF"}`;
+  $("#hitsFramePreview").textContent = `${hitsPreviewFrames().length} frame(s) ready`;
 }
 
 function setStatus(text, kind = "idle") {
@@ -126,40 +134,111 @@ function log(line, data) {
 function renderDevice(device) {
   $("#deviceName").textContent = device.productName || "Logitech HID device";
   $("#deviceIds").textContent = `${hex(device.vendorId, 4)}:${hex(device.productId, 4)}`;
-  $("#collections").textContent = device.collections
-    .map((collection) => {
-      const inputs = collection.inputReports?.map((r) => hex(r.reportId)).join(", ") || "-";
-      const outputs = collection.outputReports?.map((r) => hex(r.reportId)).join(", ") || "-";
-      const features = collection.featureReports?.map((r) => hex(r.reportId)).join(", ") || "-";
-      return `usagePage=${hex(collection.usagePage, 4)} usage=${hex(collection.usage, 4)} input=[${inputs}] output=[${outputs}] feature=[${features}]`;
-    })
-    .join("\n");
 }
 
-function renderFeatures(features) {
-  const tbody = $("#features tbody");
-  tbody.replaceChildren(
-    ...features.map((feature) => {
-      const tr = document.createElement("tr");
-      tr.innerHTML = `
-        <td>${hex(feature.index)}</td>
-        <td>${hex(feature.id, 4)}</td>
-        <td>${feature.name}</td>
-        <td>${feature.version ?? "-"}</td>
-        <td>${[
-          feature.hidden ? "hidden" : "",
-          feature.obsolete ? "obsolete" : "",
-          feature.internal ? "internal" : "",
-        ].filter(Boolean).join(", ") || "-"}</td>
-      `;
-      return tr;
+function hasFeature(featureId) {
+  return state.features.some((feature) => feature.id === featureId);
+}
+
+function renderCapabilities() {
+  const capabilities = [
+    { label: "ON-BOARD", supported: hasFeature(FEATURE.ONBOARD_PROFILES) },
+    { label: "DPI", supported: hasFeature(FEATURE.ADJUSTABLE_DPI) },
+    { label: "REPORT RATE", supported: hasFeature(FEATURE.ADJUSTABLE_REPORT_RATE) },
+    { label: "HITS", supported: true },
+  ];
+  $("#capabilityList").replaceChildren(
+    ...capabilities.map((item) => {
+      const chip = document.createElement("span");
+      chip.className = "capability-chip";
+      chip.dataset.supported = String(item.supported);
+      chip.textContent = item.label;
+      return chip;
     }),
   );
 }
 
-function updateCurrentDpiOptions(index) {
-  const select = $("#dpiIndex");
-  select.value = String(index ?? 0);
+function renderOnboardUnavailable() {
+  const badge = $("#onboardBadge");
+  badge.textContent = "UNAVAILABLE";
+  badge.dataset.state = "error";
+  $("#profileStatus").textContent = "-";
+  $("#dpiSlotStatus").textContent = "-";
+  $("#onboardMeta").textContent = "-";
+}
+
+function renderOnboardState({ mode, profile, dpi, description }) {
+  const badge = $("#onboardBadge");
+  const isOnboard = mode?.mode === ONBOARD_MODE.ONBOARD;
+  badge.textContent = isOnboard ? "ON" : mode?.label?.toUpperCase() || "UNKNOWN";
+  badge.dataset.state = isOnboard ? "ok" : "warn";
+  $("#profileStatus").textContent = `SLOT ${(profile?.profileIndex ?? selectedProfileIndex()) + 1}`;
+  $("#dpiSlotStatus").textContent = `DPI ${(dpi?.dpiIndex ?? selectedDpiSlot()) + 1}`;
+  $("#onboardMeta").textContent = `${description?.profileCount ?? 1} profile(s) / ${description?.sectorCount ?? "-"} sectors`;
+}
+
+function selectedProfileIndex() {
+  const count = Math.max(1, state.onboardDescription?.profileCount ?? 1);
+  const value = Number.parseInt($("#profileSlot").value || String(DEFAULT_PROFILE_INDEX), 10);
+  return clamp(Number.isFinite(value) ? value : DEFAULT_PROFILE_INDEX, 0, count - 1);
+}
+
+function selectedDpiSlot() {
+  const value = Number.parseInt($("#dpiSlot").value || String(DEFAULT_DPI_SLOT), 10);
+  return clamp(Number.isFinite(value) ? value : DEFAULT_DPI_SLOT, 0, 15);
+}
+
+function updateProfileOptions(description, selected = DEFAULT_PROFILE_INDEX) {
+  const select = $("#profileSlot");
+  const count = Math.max(1, description?.profileCount ?? 1);
+  const nextValue = clamp(selected, 0, count - 1);
+  select.replaceChildren(
+    ...Array.from({ length: count }, (_, index) => {
+      const option = document.createElement("option");
+      option.value = String(index);
+      option.textContent = `SLOT ${index + 1}`;
+      return option;
+    }),
+  );
+  select.value = String(nextValue);
+}
+
+function updateDpiSlotOptions(selected = DEFAULT_DPI_SLOT) {
+  const select = $("#dpiSlot");
+  const count = Math.max(DEFAULT_DPI_SLOT_COUNT, selected + 1);
+  select.replaceChildren(
+    ...Array.from({ length: count }, (_, index) => {
+      const option = document.createElement("option");
+      option.value = String(index);
+      option.textContent = `DPI ${index + 1}`;
+      return option;
+    }),
+  );
+  select.value = String(clamp(selected, 0, count - 1));
+}
+
+async function syncOnboardLiveState(driver) {
+  if (!hasFeature(FEATURE.ONBOARD_PROFILES)) return;
+  const [mode, profile, dpi] = await Promise.all([
+    driver.getOnboardMode(),
+    driver.getCurrentProfile(),
+    driver.getCurrentDpiIndex(),
+  ]);
+  updateProfileOptions(state.onboardDescription, profile.profileIndex ?? DEFAULT_PROFILE_INDEX);
+  updateDpiSlotOptions(dpi.dpiIndex ?? DEFAULT_DPI_SLOT);
+  renderOnboardState({ mode, profile, dpi, description: state.onboardDescription });
+}
+
+async function ensureOnboardReady(driver) {
+  if (!hasFeature(FEATURE.ONBOARD_PROFILES)) {
+    throw new Error("オンボードメモリ機能が見つかりません");
+  }
+  const profileIndex = selectedProfileIndex();
+  await driver.setOnboardMode(ONBOARD_MODE.ONBOARD);
+  await driver.setCurrentProfile(ONBOARD_MEMORY_TYPE.WRITEABLE, profileIndex);
+  $("#onboardBadge").textContent = "ON";
+  $("#onboardBadge").dataset.state = "ok";
+  $("#profileStatus").textContent = `SLOT ${profileIndex + 1}`;
 }
 
 async function withDriver(action, busyText) {
@@ -182,20 +261,11 @@ async function withDriver(action, busyText) {
   }
 }
 
-function hasFeature(featureId) {
-  return state.features.some((feature) => feature.id === featureId);
-}
-
-async function prepareOnboardMutation(driver) {
-  if (!$("#forceOnboardWrites").checked || !hasFeature(FEATURE.ONBOARD_PROFILES)) return;
-  await driver.setOnboardMode(ONBOARD_MODE.ONBOARD);
-  $("#mode").value = String(ONBOARD_MODE.ONBOARD);
-}
-
 async function withOnboardMutation(action, busyText) {
   await withDriver(async (driver) => {
-    await prepareOnboardMutation(driver);
+    await ensureOnboardReady(driver);
     await action(driver);
+    await syncOnboardLiveState(driver);
   }, busyText);
 }
 
@@ -213,11 +283,15 @@ function renderDpiControls() {
     ...state.dpiSensors.map((sensor) => {
       const option = document.createElement("option");
       option.value = String(sensor.index);
-      option.textContent = `sensor ${sensor.index}`;
+      option.textContent = `Sensor ${sensor.index + 1}`;
       return option;
     }),
   );
-  if (!state.dpiSensors.length) return;
+  if (!state.dpiSensors.length) {
+    $("#dpiSensorMeta").textContent = "-";
+    return;
+  }
+
   const selectedIndex = Number(sensorSelect.value || state.dpiSensors[0].index);
   const sensor = state.dpiSensors.find((item) => item.index === selectedIndex) ?? state.dpiSensors[0];
   sensorSelect.value = String(sensor.index);
@@ -227,19 +301,21 @@ function renderDpiControls() {
   slider.min = String(min);
   slider.max = String(max);
   slider.step = String(step);
-  slider.value = String(Math.max(min, Math.min(max, value)));
-  $("#sensorDpiValue").value = slider.value;
+  slider.value = String(clamp(value, min, max));
+  setOutput("#sensorDpiValue", slider.value);
+
   const presetSelect = $("#dpiPreset");
+  const presetOptions = list.length ? list : [Number(slider.value)];
   presetSelect.replaceChildren(
-    ...list.map((dpi) => {
+    ...presetOptions.map((dpi) => {
       const option = document.createElement("option");
       option.value = String(dpi);
       option.textContent = `${dpi} DPI`;
       return option;
     }),
   );
-  if (list.includes(Number(slider.value))) presetSelect.value = slider.value;
-  $("#dpiSensors").textContent = JSON.stringify(state.dpiSensors, null, 2);
+  if (presetOptions.includes(Number(slider.value))) presetSelect.value = slider.value;
+  $("#dpiSensorMeta").textContent = `${min}-${max} DPI / ${step} step`;
 }
 
 function renderReportRateControls(currentMs = null) {
@@ -254,64 +330,71 @@ function renderReportRateControls(currentMs = null) {
     }),
   );
   const current = state.reportRates.find((rate) => rate.ms === currentMs) ?? state.reportRates[0];
-  if (!current) return;
+  if (!current) {
+    $("#reportRateText").textContent = "-";
+    return;
+  }
   select.value = String(current.ms);
   const slider = $("#reportRateSlider");
+  const currentIndex = Math.max(0, state.reportRates.findIndex((rate) => rate.ms === current.ms));
   slider.min = "0";
   slider.max = String(Math.max(0, state.reportRates.length - 1));
   slider.step = "1";
-  slider.value = String(state.reportRates.findIndex((rate) => rate.ms === current.ms));
-  $("#reportRateValue").value = `${current.hz} Hz`;
+  slider.value = String(currentIndex);
+  setOutput("#reportRateValue", `${current.hz} Hz`);
+  $("#reportRateText").textContent = `${current.hz} Hz`;
+}
+
+async function refreshConfigurableControls(driver) {
+  if (hasFeature(FEATURE.ADJUSTABLE_DPI)) {
+    state.dpiSensors = await driver.getDpiSensors();
+    renderDpiControls();
+  }
+  if (hasFeature(FEATURE.ADJUSTABLE_REPORT_RATE)) {
+    const [list, current] = await Promise.all([driver.getReportRateList(), driver.getReportRate()]);
+    state.reportRates = list.rates.length
+      ? list.rates
+      : [
+          { ms: 1, hz: 1000 },
+          { ms: 2, hz: 500 },
+          { ms: 4, hz: 250 },
+          { ms: 8, hz: 125 },
+        ];
+    renderReportRateControls(current.ms || 1);
+  }
+  renderHitsModel();
 }
 
 async function refreshAll(driver) {
   const version = await driver.getProtocolVersion();
   $("#protocol").textContent = `${version.major}.${version.minor}`;
 
-  const features = await driver.enumerateFeatures();
-  state.features = features;
-  renderFeatures(features);
+  state.features = await driver.enumerateFeatures();
+  renderCapabilities();
 
-  const onboardSupported = features.some((feature) => feature.id === FEATURE.ONBOARD_PROFILES);
+  const onboardSupported = hasFeature(FEATURE.ONBOARD_PROFILES);
   $("#onboardPanel").hidden = !onboardSupported;
   if (!onboardSupported) {
+    renderOnboardUnavailable();
     log("on-board profiles feature 0x8100 is not exposed by this interface");
   } else {
-    const [desc, mode, profile, dpi] = await Promise.all([
-      driver.getOnboardDescription(),
-      driver.getOnboardMode(),
-      driver.getCurrentProfile(),
-      driver.getCurrentDpiIndex(),
-    ]);
-    $("#onboardDescription").textContent = JSON.stringify(desc, null, 2);
-    $("#mode").value = String(mode.mode);
-    $("#currentProfile").textContent = `memory=${profile.memoryType} profile=${profile.profileIndex}`;
-    updateCurrentDpiOptions(dpi.dpiIndex);
-    $("#sectorSize").value = String(desc.sectorSize || 256);
+    state.onboardDescription = await driver.getOnboardDescription();
+    updateProfileOptions(state.onboardDescription, DEFAULT_PROFILE_INDEX);
+    updateDpiSlotOptions(DEFAULT_DPI_SLOT);
+    await ensureOnboardReady(driver);
+    await syncOnboardLiveState(driver);
+    log("on-board memory mode enforced", {
+      mode: "onboard",
+      memoryType: ONBOARD_MEMORY_TYPE.WRITEABLE,
+      profileIndex: selectedProfileIndex(),
+    });
   }
 
-  const dpiSupported = features.some((feature) => feature.id === FEATURE.ADJUSTABLE_DPI);
+  const dpiSupported = hasFeature(FEATURE.ADJUSTABLE_DPI);
   $("#dpiPanel").hidden = !dpiSupported;
-  if (dpiSupported) {
-    state.dpiSensors = await driver.getDpiSensors();
-    renderDpiControls();
-  }
-
-  const reportRateSupported = features.some((feature) => feature.id === FEATURE.ADJUSTABLE_REPORT_RATE);
+  const reportRateSupported = hasFeature(FEATURE.ADJUSTABLE_REPORT_RATE);
   $("#reportRatePanel").hidden = !reportRateSupported;
-  if (reportRateSupported) {
-    const [list, current] = await Promise.all([driver.getReportRateList(), driver.getReportRate()]);
-    state.reportRates = list.rates.length ? list.rates : [
-      { ms: 1, hz: 1000 },
-      { ms: 2, hz: 500 },
-      { ms: 4, hz: 250 },
-      { ms: 8, hz: 125 },
-    ];
-    renderReportRateControls(current.ms || 1);
-    $("#reportRateState").textContent = JSON.stringify({ list, current }, null, 2);
-  }
-
-  renderHitsModel();
+  await refreshConfigurableControls(driver);
 }
 
 async function connect() {
@@ -322,73 +405,45 @@ async function connect() {
     if (state.unsubscribe) state.unsubscribe();
     if (state.driver) await state.driver.close();
 
-    const deviceIndex = Number.parseInt($("#deviceIndex").value, 16);
-    const driver = await LogitechHidpp20Driver.fromDevice(device, { deviceIndex });
+    const driver = await LogitechHidpp20Driver.fromDevice(device, { deviceIndex: DEFAULT_DEVICE_INDEX });
     state.driver = driver;
     state.unsubscribe = driver.onReport((frame) => {
-      $("#lastReport").textContent = frame.hex;
+      log("report", { raw: frame.hex });
     });
     await refreshAll(driver);
     setStatus("connected", "ok");
-    log("connected", { productName: device.productName, vendorId: device.vendorId, productId: device.productId });
+    log("connected", {
+      productName: device.productName,
+      vendorId: device.vendorId,
+      productId: device.productId,
+    });
   } catch (error) {
     setStatus(error.message, "error");
     log("connect failed", { message: error.message, name: error.name });
   }
 }
 
-async function readSector() {
-  await withDriver(async (driver) => {
-    const page = Number($("#page").value);
-    const sectorSize = Number($("#sectorSize").value);
-    const memoryType = Number($("#memoryType").value);
-    const data = await driver.readOnboardSector(memoryType, page, sectorSize, ({ offset }) => {
-      setStatus(`reading page ${page} @ ${offset}`, "busy");
-    });
-    state.lastSector = data;
-    $("#sectorDump").textContent = Array.from({ length: Math.ceil(data.length / 16) }, (_, line) => {
-      const offset = line * 16;
-      return `${offset.toString(16).padStart(4, "0")}: ${bytesToHex(data.slice(offset, offset + 16))}`;
-    }).join("\n");
-    log("read on-board sector", { memoryType, page, sectorSize });
-  }, "reading on-board memory");
+async function setCurrentProfile() {
+  const profileIndex = selectedProfileIndex();
+  await withOnboardMutation(async () => {
+    log("profile slot selected", { memoryType: ONBOARD_MEMORY_TYPE.WRITEABLE, profileIndex });
+  }, "setting profile");
 }
 
-async function rawFeatureCall() {
-  await withDriver(async (driver) => {
-    const feature = Number.parseInt($("#rawFeature").value, 16);
-    const functionId = Number.parseInt($("#rawFunction").value, 16);
-    const params = parseHexBytes($("#rawParams").value);
-    const response = await driver.rawCall(feature, functionId, params);
-    log("raw feature response", {
-      reportId: hex(response.reportId),
-      featureIndex: hex(response.featureIndex),
-      functionId: hex(response.functionId),
-      params: bytesToHex(response.parameters),
-      raw: response.hex,
-    });
-  }, "sending raw feature call");
-}
-
-async function rawReport() {
-  await withDriver(async (driver) => {
-    const reportId = Number.parseInt($("#rawReportId").value, 16);
-    const payload = parseHexBytes($("#rawReportPayload").value);
-    const response = await driver.rawReport(reportId, payload, { waitForAny: $("#waitRaw").checked });
-    log("raw report sent", {
-      reportId: hex(reportId),
-      payload: bytesToHex(payload),
-      response: response?.hex,
-    });
-  }, "sending raw report");
+async function setDpiSlot() {
+  await withOnboardMutation(async (driver) => {
+    const dpiIndex = selectedDpiSlot();
+    await driver.setCurrentDpiIndex(dpiIndex);
+    log("DPI slot selected", { dpiIndex });
+  }, "setting DPI slot");
 }
 
 async function setReportRate() {
   await withOnboardMutation(async (driver) => {
-    await driver.setReportRateMs(Number($("#reportRateMs").value));
+    const ms = Number($("#reportRateMs").value);
+    await driver.setReportRateMs(ms);
     const current = await driver.getReportRate();
     renderReportRateControls(current.ms);
-    $("#reportRateState").textContent = JSON.stringify({ current }, null, 2);
     log("report rate set", current);
   }, "setting report rate");
 }
@@ -404,140 +459,81 @@ async function setSensorDpi() {
   }, "setting sensor DPI");
 }
 
-async function parseCaptureFile() {
-  const file = $("#pcapFile").files?.[0];
-  if (!file) {
-    setStatus("pcap file を選択してください", "warn");
-    return;
-  }
-  try {
-    setStatus("parsing pcap", "busy");
-    const parsed = parsePcap(await file.arrayBuffer());
-    state.pcapFrames = summarizeFrames(parsed.frames).filter((frame) => frame.direction === "out");
-    state.selectedReplayFrames = [];
-    renderPcapFrames(state.pcapFrames);
-    log("pcap parsed", {
-      linkType: parsed.linkType,
-      packets: parsed.packets.length,
-      hidppFrames: parsed.frames.length,
-      outgoingUniqueFrames: state.pcapFrames.length,
+async function writeHitsFrames(driver) {
+  const frames = [];
+  for (const sideIndex of hitsSideIndexesForTarget()) {
+    const payload = buildCapturedHitsPayload(sideIndex);
+    const response = await driver.rawReport(REPORT.LONG, payload, { waitForAny: true, timeoutMs: 1500 });
+    frames.push({
+      sideIndex,
+      report: `11 ${bytesToHex(payload)}`,
+      response: response?.hex,
     });
-    setStatus("pcap parsed", "ok");
-  } catch (error) {
-    setStatus(error.message, "error");
-    log("pcap parse failed", { message: error.message });
+    await new Promise((resolve) => setTimeout(resolve, 40));
   }
-}
-
-function renderPcapFrames(frames) {
-  const tbody = $("#pcapFrames tbody");
-  tbody.replaceChildren(
-    ...frames.slice(0, 250).map((frame, index) => {
-      const tr = document.createElement("tr");
-      const checkbox = document.createElement("input");
-      checkbox.type = "checkbox";
-      checkbox.addEventListener("change", () => {
-        if (checkbox.checked) state.selectedReplayFrames.push(frame);
-        else state.selectedReplayFrames = state.selectedReplayFrames.filter((item) => item !== frame);
-      });
-      const cells = [
-        checkbox,
-        String(index + 1),
-        `${frame.direction} x${frame.count}`,
-        hex(frame.reportId),
-        hex(frame.deviceIndex),
-        hex(frame.featureIndex),
-        hex(frame.functionId),
-        frame.paramsHex,
-      ];
-      for (const cell of cells) {
-        const td = document.createElement("td");
-        if (cell instanceof Node) td.append(cell);
-        else td.textContent = cell;
-        tr.append(td);
-      }
-      return tr;
-    }),
-  );
-}
-
-async function replaySelectedFrames() {
-  await withDriver(async (driver) => {
-    if (!state.selectedReplayFrames.length) throw new Error("再送するフレームを選択してください");
-    for (const frame of state.selectedReplayFrames) {
-      const payload = Array.from(frame.raw.slice(1));
-      const response = await driver.rawReport(frame.reportId, payload, { waitForAny: $("#replayWait").checked });
-      log("replayed frame", { frame: frame.hex, response: response?.hex });
-      await new Promise((resolve) => setTimeout(resolve, 40));
-    }
-  }, "replaying captured HID++ frames");
+  return frames;
 }
 
 async function applyCapturedHits() {
   await withOnboardMutation(async (driver) => {
-    const frames = [];
-    for (const sideIndex of hitsSideIndexesForTarget()) {
-      const payload = buildCapturedHitsPayload(sideIndex);
-      const response = await driver.rawReport(REPORT.LONG, payload, { waitForAny: true, timeoutMs: 1500 });
-      frames.push({
-        sideIndex,
-        report: `11 ${bytesToHex(payload)}`,
-        response: response?.hex,
-      });
-      await new Promise((resolve) => setTimeout(resolve, 40));
-    }
-    log("captured HITS applied", { settings: buildHitsSettingsPatch(), frames });
-  }, "applying captured HITS frame");
+    const frames = await writeHitsFrames(driver);
+    log("HITS applied", { settings: buildHitsSettingsPatch(), frames });
+  }, "applying HITS");
 }
 
-async function armWriteAndRun() {
+async function applyOnboardProfile() {
   await withOnboardMutation(async (driver) => {
-    const arm = $("#writeArm").value.trim();
-    if (arm !== "WRITE ONBOARD") {
-      throw new Error('書き込みには "WRITE ONBOARD" と入力してください');
+    const applied = {
+      profileIndex: selectedProfileIndex(),
+      dpiSlot: selectedDpiSlot(),
+    };
+
+    await driver.setCurrentDpiIndex(applied.dpiSlot);
+
+    if (hasFeature(FEATURE.ADJUSTABLE_DPI) && state.dpiSensors.length) {
+      applied.dpi = {
+        sensorIndex: Number($("#dpiSensorIndex").value || 0),
+        dpi: Number($("#sensorDpi").value),
+      };
+      await driver.setSensorDpi(applied.dpi.sensorIndex, applied.dpi.dpi);
     }
-    const page = Number($("#writePage").value);
-    const offset = Number($("#writeOffset").value);
-    const data = parseHexBytes($("#writeBytes").value);
-    await driver.writeOnboardBytes(page, offset, data, { dangerouslyAllowWrite: true });
-    log("write completed", { page, offset, bytes: bytesToHex(data) });
-  }, "writing on-board memory");
+
+    if (hasFeature(FEATURE.ADJUSTABLE_REPORT_RATE) && state.reportRates.length) {
+      applied.reportRate = {
+        ms: Number($("#reportRateMs").value),
+        hz: Math.round(1000 / Number($("#reportRateMs").value)),
+      };
+      await driver.setReportRateMs(applied.reportRate.ms);
+    }
+
+    applied.hits = buildHitsSettingsPatch();
+    applied.hitsFrames = await writeHitsFrames(driver);
+    await refreshConfigurableControls(driver);
+    log("on-board profile saved", applied);
+  }, "writing on-board profile");
 }
 
 $("#connect").addEventListener("click", connect);
 $("#refresh").addEventListener("click", () => withDriver(refreshAll, "refreshing"));
-$("#setMode").addEventListener("click", () =>
-  withDriver((driver) => driver.setOnboardMode(Number($("#mode").value)), "setting mode"),
-);
-$("#setDpiIndex").addEventListener("click", () =>
-  withOnboardMutation((driver) => driver.setCurrentDpiIndex(Number($("#dpiIndex").value)), "setting DPI index"),
-);
-$("#setCurrentProfile").addEventListener("click", () =>
-  withOnboardMutation(
-    (driver) => driver.setCurrentProfile(ONBOARD_MEMORY_TYPE.WRITEABLE, Number($("#profileIndex").value)),
-    "setting current profile",
-  ),
-);
-$("#readSector").addEventListener("click", readSector);
+$("#applyOnboardProfile").addEventListener("click", applyOnboardProfile);
+$("#setCurrentProfile").addEventListener("click", setCurrentProfile);
+$("#setDpiSlot").addEventListener("click", setDpiSlot);
 $("#setSensorDpi").addEventListener("click", setSensorDpi);
 $("#setReportRate").addEventListener("click", setReportRate);
-$("#rawCall").addEventListener("click", rawFeatureCall);
-$("#rawReport").addEventListener("click", rawReport);
-$("#parsePcap").addEventListener("click", parseCaptureFile);
-$("#replayFrames").addEventListener("click", replaySelectedFrames);
 $("#applyCapturedHits").addEventListener("click", applyCapturedHits);
-$("#writeRun").addEventListener("click", armWriteAndRun);
+
 for (const selector of ["#hitsTarget", "#hitsActuation", "#hitsRapidEnabled", "#hitsRapid", "#hitsHaptics"]) {
   $(selector).addEventListener("input", renderHitsModel);
   $(selector).addEventListener("change", renderHitsModel);
 }
+
 $("#sensorDpi").addEventListener("input", () => {
-  $("#sensorDpiValue").value = $("#sensorDpi").value;
+  setOutput("#sensorDpiValue", $("#sensorDpi").value);
 });
 $("#dpiPreset").addEventListener("change", () => {
   if ($("#dpiPreset").value) {
     $("#sensorDpi").value = $("#dpiPreset").value;
-    $("#sensorDpiValue").value = $("#dpiPreset").value;
+    setOutput("#sensorDpiValue", $("#dpiPreset").value);
   }
 });
 $("#dpiSensorIndex").addEventListener("change", renderDpiControls);
@@ -546,7 +542,14 @@ $("#reportRateSlider").addEventListener("input", () => {
   const rate = state.reportRates[Number($("#reportRateSlider").value)];
   if (!rate) return;
   $("#reportRateMs").value = String(rate.ms);
-  $("#reportRateValue").value = `${rate.hz} Hz`;
+  setOutput("#reportRateValue", `${rate.hz} Hz`);
+  $("#reportRateText").textContent = `${rate.hz} Hz`;
+});
+$("#profileSlot").addEventListener("change", () => {
+  $("#profileStatus").textContent = `SLOT ${selectedProfileIndex() + 1}`;
+});
+$("#dpiSlot").addEventListener("change", () => {
+  $("#dpiSlotStatus").textContent = `DPI ${selectedDpiSlot() + 1}`;
 });
 
 if (!("hid" in navigator)) {
@@ -554,4 +557,7 @@ if (!("hid" in navigator)) {
 } else {
   setStatus("ready");
 }
+updateProfileOptions(null, DEFAULT_PROFILE_INDEX);
+updateDpiSlotOptions(DEFAULT_DPI_SLOT);
+renderCapabilities();
 renderHitsModel();
