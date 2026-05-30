@@ -541,12 +541,21 @@ class LogitechHidpp20Driver {
 
   async readOnboardSector(memoryType, page, sectorSize, onProgress = () => {}) {
     const lines = [];
-    for (let offset = 0; offset < sectorSize; offset += 16) {
+    let offset = 0;
+    for (; offset < sectorSize - 15; offset += 16) {
       const line = await this.readOnboardLine(memoryType, page, offset);
       lines.push(...line);
       onProgress({ offset, sectorSize });
       await sleep(8);
     }
+
+    const lastOffset = Math.max(0, sectorSize - 16);
+    if (lastOffset !== offset - 16) {
+      const line = await this.readOnboardLine(memoryType, page, lastOffset);
+      lines.push(...line.slice(Math.max(0, offset - lastOffset)));
+      onProgress({ offset: lastOffset, sectorSize });
+    }
+
     return new Uint8Array(lines.slice(0, sectorSize));
   }
 
