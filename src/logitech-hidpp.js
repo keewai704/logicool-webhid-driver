@@ -575,28 +575,38 @@ class LogitechHidpp20Driver {
 
   async getOnboardProfileHeaders(description = null) {
     const sectorSize = description?.sectorSize ?? (await this.getOnboardDescription()).sectorSize;
-    let memoryType = ONBOARD_MEMORY_TYPE.WRITEABLE;
-    let bytes = await this.readOnboardSector(memoryType, 0, sectorSize);
-    const emptyControl =
-      bytes.slice(0, 4).every((value) => value === 0x00) || bytes.slice(0, 4).every((value) => value === 0xff);
-    if (emptyControl) {
-      memoryType = ONBOARD_MEMORY_TYPE.ROM;
-      bytes = await this.readOnboardSector(memoryType, 0, sectorSize);
-    }
+    const readHeaders = async (memoryType) => {
+      const headers = [];
+      const raw = [];
+      for (let offset = 0; offset < sectorSize; offset += 16) {
+        const line = await this.readOnboardLine(memoryType, 0, offset);
+        raw.push(...line);
+        if (offset === 0) {
+          const emptyControl =
+            line.slice(0, 4).every((value) => value === 0x00) || line.slice(0, 4).every((value) => value === 0xff);
+          if (emptyControl) return { headers, memoryType, raw: new Uint8Array(raw), empty: true };
+        }
+        for (let cursor = 0; cursor + 3 < line.length; cursor += 4) {
+          const sector = readU16BE(line, cursor);
+          if (sector === 0xffff) {
+            return { headers, memoryType, raw: new Uint8Array(raw), empty: false };
+          }
+          headers.push({
+            profileIndex: headers.length,
+            sector,
+            enabled: line[cursor + 2],
+            offset: offset + cursor,
+            sourceMemoryType: memoryType,
+          });
+        }
+        await sleep(8);
+      }
+      return { headers, memoryType, raw: new Uint8Array(raw), empty: false };
+    };
 
-    const headers = [];
-    for (let offset = 0; offset + 3 < bytes.length; offset += 4) {
-      const sector = readU16BE(bytes, offset);
-      if (sector === 0xffff) break;
-      headers.push({
-        profileIndex: headers.length,
-        sector,
-        enabled: bytes[offset + 2],
-        offset,
-        sourceMemoryType: memoryType,
-      });
-    }
-    return { headers, memoryType, raw: bytes };
+    const writeable = await readHeaders(ONBOARD_MEMORY_TYPE.WRITEABLE);
+    if (!writeable.empty) return writeable;
+    return readHeaders(ONBOARD_MEMORY_TYPE.ROM);
   }
 
   async readOnboardProfile(profileIndex, description = null) {
