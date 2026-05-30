@@ -16,6 +16,7 @@ const PARAM_LENGTH = Object.freeze({
   [REPORT.VERY_LONG]: 60,
 });
 
+const HIDPP10_ERROR = 0x8f;
 const HIDPP20_ERROR = 0xff;
 
 const FEATURE = Object.freeze({
@@ -210,6 +211,16 @@ class Hidpp20Transport {
         softwareId: report[4] & 0x0f,
         code: report[5],
         data: report.slice(6),
+      };
+    }
+    if (featureIndex === HIDPP10_ERROR) {
+      frame.error = {
+        featureIndex: report[3],
+        functionId: (report[4] >> 4) & 0x0f,
+        softwareId: report[4] & 0x0f,
+        code: report[5],
+        data: report.slice(6),
+        hidpp10: true,
       };
     }
     return frame;

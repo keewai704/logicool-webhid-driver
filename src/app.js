@@ -254,6 +254,54 @@ function hasFeature(featureId) {
   return state.features.some((feature) => feature.id === featureId);
 }
 
+function connectionDeviceIndexes(device) {
+  const defaultIndex = LogitechHidpp20Driver.defaultDeviceIndex(device);
+  const receiverIndexes = [defaultIndex, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, DEFAULT_WIRED_DEVICE_INDEX];
+  const directIndexes = [defaultIndex, DEFAULT_RECEIVER_DEVICE_INDEX, DEFAULT_WIRED_DEVICE_INDEX];
+  return unique(device?.productId === 0xc54d || device?.productId === 0xab24 ? receiverIndexes : directIndexes);
+}
+
+function hasTargetMouseFeatures(features) {
+  return features.some((feature) => feature.id === FEATURE.ONBOARD_PROFILES || feature.id === FEATURE.ADJUSTABLE_DPI);
+}
+
+async function openResponsiveDriver(device) {
+  const attempts = [];
+  for (const deviceIndex of connectionDeviceIndexes(device)) {
+    let driver = null;
+    try {
+      driver = await LogitechHidpp20Driver.fromDevice(device, { deviceIndex, timeoutMs: 800 });
+      const version = await driver.getProtocolVersion();
+      const features = await driver.enumerateFeatures();
+      if (!hasTargetMouseFeatures(features)) {
+        attempts.push({
+          productId: hex(device.productId, 4),
+          protocol: `${version.major}.${version.minor}`,
+          reason: "target mouse features not found",
+        });
+        await driver.close();
+        continue;
+      }
+      return { driver, version, features, attempts };
+    } catch (error) {
+      attempts.push({
+        productId: hex(device.productId, 4),
+        error: errorSummary(error),
+      });
+      if (driver) {
+        try {
+          await driver.close();
+        } catch {
+          // Ignore close errors while probing alternate HID++ targets.
+        }
+      }
+    }
+  }
+  const error = new Error("HID++ 2.0 mouse interface was not found on this WebHID device");
+  error.attempts = attempts;
+  throw error;
+}
+
 function renderCapabilities() {
   const capabilities = [
     { label: "ON-BOARD", supported: hasFeature(FEATURE.ONBOARD_PROFILES) },
@@ -870,7 +918,8 @@ async function connect() {
     if (state.unsubscribe) state.unsubscribe();
     if (state.driver) await state.driver.close();
 
-    const driver = await LogitechHidpp20Driver.fromDevice(device);
+    const opened = await openResponsiveDriver(device);
+    const driver = opened.driver;
     state.driver = driver;
     state.unsubscribe = driver.onReport((frame) => {
       if (handleHitsPressureFrame(frame)) return;
@@ -882,10 +931,11 @@ async function connect() {
       productName: device.productName,
       vendorId: device.vendorId,
       productId: device.productId,
+      probeAttempts: opened.attempts,
     });
   } catch (error) {
     setStatus(error.message, "error");
-    log("connect failed", { message: error.message, name: error.name });
+    log("connect failed", { message: error.message, name: error.name, attempts: error.attempts });
   }
 }
 
