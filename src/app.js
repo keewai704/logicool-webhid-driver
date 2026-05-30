@@ -604,7 +604,27 @@ async function writeCapturedAdvancedDpi(driver, sensorIndex, dpi) {
 
 async function writeSelectedSensorDpi(driver, sensorIndex, dpi) {
   const result = {};
-  if (hasFeature(FEATURE.ADJUSTABLE_DPI)) {
+  let appliedToOnboardProfile = false;
+  if (hasFeature(FEATURE.ONBOARD_PROFILES) && state.onboardDescription?.sectorSize) {
+    const profileIndex = selectedProfileIndex();
+    const dpiIndex = selectedDpiSlot();
+    try {
+      result.onboardProfile = await driver.setOnboardProfileDpi(profileIndex, dpiIndex, dpi, state.onboardDescription);
+      await driver.setCurrentDpiIndex(dpiIndex);
+      state.extendedDpi = {
+        sensorIndex,
+        current: dpi,
+        default: selectedSensor()?.default || 1600,
+        y: dpi,
+        lod: selectedSensor()?.lod ?? state.extendedDpi?.lod ?? 0x02,
+      };
+      appliedToOnboardProfile = true;
+    } catch (error) {
+      result.onboardProfile = { error: errorSummary(error) };
+    }
+  }
+
+  if (!appliedToOnboardProfile && hasFeature(FEATURE.ADJUSTABLE_DPI)) {
     try {
       await driver.setSensorDpi(sensorIndex, dpi);
       result.standard = "ok";
@@ -613,7 +633,7 @@ async function writeSelectedSensorDpi(driver, sensorIndex, dpi) {
     }
   }
 
-  if (hasFeature(FEATURE.ADJUSTABLE_DPI_ADVANCED)) {
+  if (!appliedToOnboardProfile && hasFeature(FEATURE.ADJUSTABLE_DPI_ADVANCED)) {
     const sensor = selectedSensor();
     try {
       await driver.setExtendedDpi(sensorIndex, dpi, {
@@ -636,13 +656,8 @@ async function writeSelectedSensorDpi(driver, sensorIndex, dpi) {
       }
     } catch (error) {
       result.extendedAdvanced = { error: errorSummary(error) };
-      try {
-        result.capturedAdvanced = await writeCapturedAdvancedDpi(driver, sensorIndex, dpi);
-      } catch (fallbackError) {
-        result.capturedAdvanced = { error: errorSummary(fallbackError) };
-      }
     }
-  } else if (!hasFeature(FEATURE.ADJUSTABLE_DPI)) {
+  } else if (!appliedToOnboardProfile && !hasFeature(FEATURE.ADJUSTABLE_DPI)) {
     result.capturedAdvanced = await writeCapturedAdvancedDpi(driver, sensorIndex, dpi);
   }
 

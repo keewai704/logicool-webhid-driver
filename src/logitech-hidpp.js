@@ -99,6 +99,27 @@ function writeU16BE(bytes, offset, value) {
   bytes[offset + 1] = value & 0xff;
 }
 
+function readU16LE(bytes, offset) {
+  return (bytes[offset] ?? 0) | ((bytes[offset + 1] ?? 0) << 8);
+}
+
+function writeU16LE(bytes, offset, value) {
+  bytes[offset] = value & 0xff;
+  bytes[offset + 1] = (value >> 8) & 0xff;
+}
+
+function crc16Ccitt(bytes) {
+  let crc = 0xffff;
+  for (const byte of bytes) {
+    crc ^= (byte & 0xff) << 8;
+    for (let bit = 0; bit < 8; bit += 1) {
+      crc = crc & 0x8000 ? (crc << 1) ^ 0x1021 : crc << 1;
+      crc &= 0xffff;
+    }
+  }
+  return crc;
+}
+
 function reportTypeForParamCount(count) {
   if (count <= PARAM_LENGTH[REPORT.SHORT]) return REPORT.SHORT;
   if (count <= PARAM_LENGTH[REPORT.LONG]) return REPORT.LONG;
@@ -534,7 +555,7 @@ class LogitechHidpp20Driver {
     const bytes = data instanceof Uint8Array ? data : new Uint8Array(data);
     const index = await this.featureIndex(FEATURE.ONBOARD_PROFILES);
     const start = new Uint8Array(6);
-    start[0] = ONBOARD_MEMORY_TYPE.WRITEABLE;
+    start[0] = options.memoryType ?? ONBOARD_MEMORY_TYPE.WRITEABLE;
     start[1] = page & 0xff;
     writeU16BE(start, 2, offset);
     writeU16BE(start, 4, bytes.length);
@@ -548,6 +569,83 @@ class LogitechHidpp20Driver {
     }
 
     await this.transport.call(index, 8, []);
+  }
+
+  async getOnboardProfileHeaders(description = null) {
+    const sectorSize = description?.sectorSize ?? (await this.getOnboardDescription()).sectorSize;
+    let memoryType = ONBOARD_MEMORY_TYPE.WRITEABLE;
+    let bytes = await this.readOnboardSector(memoryType, 0, sectorSize);
+    const emptyControl =
+      bytes.slice(0, 4).every((value) => value === 0x00) || bytes.slice(0, 4).every((value) => value === 0xff);
+    if (emptyControl) {
+      memoryType = ONBOARD_MEMORY_TYPE.ROM;
+      bytes = await this.readOnboardSector(memoryType, 0, sectorSize);
+    }
+
+    const headers = [];
+    for (let offset = 0; offset + 3 < bytes.length; offset += 4) {
+      const sector = readU16BE(bytes, offset);
+      if (sector === 0xffff) break;
+      headers.push({
+        profileIndex: headers.length,
+        sector,
+        enabled: bytes[offset + 2],
+        offset,
+        sourceMemoryType: memoryType,
+      });
+    }
+    return { headers, memoryType, raw: bytes };
+  }
+
+  async readOnboardProfile(profileIndex, description = null) {
+    const onboardDescription = description ?? (await this.getOnboardDescription());
+    const { headers } = await this.getOnboardProfileHeaders(onboardDescription);
+    const header = headers[profileIndex];
+    if (!header) {
+      throw new HidppError(`On-board profile ${profileIndex + 1} is not available`);
+    }
+    const memoryType = (header.sector >> 8) & 0xff;
+    const page = header.sector & 0xff;
+    const bytes = await this.readOnboardSector(memoryType, page, onboardDescription.sectorSize);
+    return {
+      profileIndex,
+      sector: header.sector,
+      enabled: header.enabled,
+      reportRate: bytes[0],
+      resolutionDefaultIndex: bytes[1],
+      resolutionShiftIndex: bytes[2],
+      resolutions: Array.from({ length: 5 }, (_, index) => readU16LE(bytes, 3 + index * 2)),
+      writeCount: readU16LE(bytes, 18),
+      raw: bytes,
+    };
+  }
+
+  async setOnboardProfileDpi(profileIndex, dpiIndex, dpi, description = null) {
+    const onboardDescription = description ?? (await this.getOnboardDescription());
+    const profile = await this.readOnboardProfile(profileIndex, onboardDescription);
+    const bytes = new Uint8Array(profile.raw);
+    const clampedDpiIndex = Math.max(0, Math.min(4, dpiIndex));
+    writeU16LE(bytes, 3 + clampedDpiIndex * 2, dpi);
+    const crc = crc16Ccitt(bytes.slice(0, onboardDescription.sectorSize - 2));
+    writeU16BE(bytes, onboardDescription.sectorSize - 2, crc);
+
+    const memoryType = (profile.sector >> 8) & 0xff;
+    const page = profile.sector & 0xff;
+    await this.writeOnboardBytes(page, 0, bytes, {
+      dangerouslyAllowWrite: true,
+      memoryType,
+    });
+
+    const written = await this.readOnboardProfile(profileIndex, onboardDescription);
+    return {
+      profileIndex,
+      dpiIndex: clampedDpiIndex,
+      dpi,
+      sector: profile.sector,
+      before: profile.resolutions,
+      after: written.resolutions,
+      crc,
+    };
   }
 
   async getDpiSensors() {
