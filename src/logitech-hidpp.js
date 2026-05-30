@@ -669,6 +669,35 @@ class LogitechHidpp20Driver {
     };
   }
 
+  async setOnboardProfileDpiAll(profileIndex, dpi, description = null) {
+    const onboardDescription = description ?? (await this.getOnboardDescription());
+    const profile = await this.readOnboardProfile(profileIndex, onboardDescription);
+    const bytes = new Uint8Array(profile.raw);
+    for (let dpiIndex = 0; dpiIndex < 5; dpiIndex += 1) {
+      writeU16LE(bytes, 3 + dpiIndex * 2, dpi);
+    }
+    const crc = crc16Ccitt(bytes.slice(0, onboardDescription.sectorSize - 2));
+    writeU16BE(bytes, onboardDescription.sectorSize - 2, crc);
+
+    const memoryType = (profile.sector >> 8) & 0xff;
+    const page = profile.sector & 0xff;
+    await this.writeOnboardBytes(page, 0, bytes, {
+      dangerouslyAllowWrite: true,
+      memoryType,
+    });
+
+    const written = await this.readOnboardProfile(profileIndex, onboardDescription);
+    return {
+      profileIndex,
+      dpiIndexes: [0, 1, 2, 3, 4],
+      dpi,
+      sector: profile.sector,
+      before: profile.resolutions,
+      after: written.resolutions,
+      crc,
+    };
+  }
+
   async getDpiSensors() {
     const index = await this.featureIndex(FEATURE.ADJUSTABLE_DPI);
     const countResponse = await this.transport.call(index, 0, []);

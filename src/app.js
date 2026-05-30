@@ -14,16 +14,19 @@ const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const DEFAULT_RECEIVER_DEVICE_INDEX = 0x01;
 const DEFAULT_WIRED_DEVICE_INDEX = 0xff;
 const DEFAULT_PROFILE_INDEX = 0;
-const DEFAULT_DPI_SLOT = 0;
-const DEFAULT_DPI_SLOT_COUNT = 5;
+const DEFAULT_DPI_INDEX = 0;
 const DIRECT_WIRED_PRODUCT_ID = 0xc0a8;
 const G_HUB_ADVANCED_DPI_RANGE = Object.freeze({ min: 100, max: 32000, step: 100 });
 const FALLBACK_REPORT_RATES = Object.freeze([
+  { ms: 0.125, hz: 8000, capturedValue: 0x06 },
+  { ms: 0.25, hz: 4000, capturedValue: 0x05 },
+  { ms: 0.5, hz: 2000, capturedValue: 0x04 },
   { ms: 1, hz: 1000, capturedValue: 0x03 },
   { ms: 2, hz: 500, capturedValue: 0x02 },
   { ms: 4, hz: 250, capturedValue: 0x01 },
   { ms: 8, hz: 125, capturedValue: 0x00 },
 ]);
+const STANDARD_REPORT_RATES = Object.freeze(FALLBACK_REPORT_RATES.filter((rate) => rate.ms >= 1));
 const CAPTURED_ADVANCED_DPI_FEATURE_INDEX = 0x09;
 const CAPTURED_ADVANCED_DPI_SET_FUNCTION = 0x06;
 const CAPTURED_ADVANCED_DPI_COMMIT_FUNCTION = 0x07;
@@ -48,9 +51,11 @@ const state = {
   features: [],
   onboardDescription: null,
   onboardProfiles: [],
+  activeProfileIndex: DEFAULT_PROFILE_INDEX,
+  currentDpiIndex: DEFAULT_DPI_INDEX,
   dpiSensors: [],
   reportRates: {
-    wired: [...FALLBACK_REPORT_RATES],
+    wired: [...STANDARD_REPORT_RATES],
     wireless: [...FALLBACK_REPORT_RATES],
   },
   currentReportRate: {
@@ -136,49 +141,48 @@ function setOutput(selector, value) {
   el.textContent = String(value);
 }
 
-function hitsButtonsForTarget() {
-  const target = $("#hitsTarget").value;
-  if (target === "left") return [SUPERSTRIKE_HITS_MODEL.buttonIds.left];
-  if (target === "right") return [SUPERSTRIKE_HITS_MODEL.buttonIds.right];
-  return [SUPERSTRIKE_HITS_MODEL.buttonIds.left, SUPERSTRIKE_HITS_MODEL.buttonIds.right];
+function hitsSideFromIndex(sideIndex) {
+  return sideIndex === 1 ? "right" : "left";
 }
 
-function hitsSideIndexesForTarget() {
-  const target = $("#hitsTarget").value;
-  if (target === "left") return [0];
-  if (target === "right") return [1];
-  return [0, 1];
+function hitsSideIndex(side) {
+  return side === "right" ? 1 : 0;
 }
 
-function hitsTargetLabel() {
-  const target = $("#hitsTarget").value;
-  if (target === "left") return "LEFT";
-  if (target === "right") return "RIGHT";
-  return "LEFT + RIGHT";
+function hitsButtonId(side) {
+  return SUPERSTRIKE_HITS_MODEL.buttonIds[side];
+}
+
+function hitsSideSettings(side) {
+  return {
+    side,
+    sideIndex: hitsSideIndex(side),
+    buttonId: hitsButtonId(side),
+    actuation: Number($(`#${side}HitsActuation`).value),
+    rapid: Number($(`#${side}HitsRapid`).value),
+    haptics: Number($(`#${side}HitsHaptics`).value),
+  };
+}
+
+function hitsSettings() {
+  return ["left", "right"].map(hitsSideSettings);
 }
 
 function buildHitsSettingsPatch() {
-  const buttons = hitsButtonsForTarget();
-  const actuation = Number($("#hitsActuation").value);
-  const rapid = Number($("#hitsRapid").value);
-  const haptics = Number($("#hitsHaptics").value);
-  const rapidEnabled = $("#hitsRapidEnabled").checked;
+  const settings = hitsSettings();
   return {
-    targetButtonIds: buttons,
+    targetButtonIds: settings.map((setting) => setting.buttonId),
     analogPreset: {
-      actuationPointValues: Object.fromEntries(buttons.map((button) => [button, actuation])),
-      rapidTriggerExplicitStates: rapidEnabled ? buttons : [],
-      rapidTriggerValues: Object.fromEntries(buttons.map((button) => [button, rapid])),
-      clickHapticsValues: Object.fromEntries(buttons.map((button) => [button, haptics])),
+      actuationPointValues: Object.fromEntries(settings.map((setting) => [setting.buttonId, setting.actuation])),
+      rapidTriggerExplicitStates: settings.map((setting) => setting.buttonId),
+      rapidTriggerValues: Object.fromEntries(settings.map((setting) => [setting.buttonId, setting.rapid])),
+      clickHapticsValues: Object.fromEntries(settings.map((setting) => [setting.buttonId, setting.haptics])),
     },
   };
 }
 
 function buildCapturedHitsPayload(sideIndex, deviceIndex = activeDeviceIndex()) {
-  const actuation = Number($("#hitsActuation").value);
-  const rapid = Number($("#hitsRapid").value);
-  const rapidEnabled = $("#hitsRapidEnabled").checked;
-  const haptics = Number($("#hitsHaptics").value);
+  const { actuation, rapid, haptics } = hitsSideSettings(hitsSideFromIndex(sideIndex));
   const payload = new Uint8Array(19);
   payload.set([
     deviceIndex,
@@ -186,51 +190,56 @@ function buildCapturedHitsPayload(sideIndex, deviceIndex = activeDeviceIndex()) 
     (HITS_WRITE_FUNCTION << 4) | HITS_SOFTWARE_ID,
     sideIndex & 0xff,
     Math.max(0, Math.min(0xff, actuation * 4)),
-    Math.max(0, Math.min(0xff, rapid * 4 + (rapidEnabled ? 1 : 0))),
+    Math.max(0, Math.min(0xff, rapid * 4 + 1)),
     Math.max(0, Math.min(0xff, haptics * 4)),
   ]);
   return payload;
 }
 
-function hitsPreviewFrames() {
-  return hitsSideIndexesForTarget().map((sideIndex) => `11 ${bytesToHex(buildCapturedHitsPayload(sideIndex))}`);
-}
-
 function renderHitsModel() {
-  const actuation = $("#hitsActuation").value;
-  const rapid = $("#hitsRapid").value;
-  const haptics = $("#hitsHaptics").value;
-  setOutput("#hitsActuationValue", actuation);
-  setOutput("#hitsRapidValue", rapid);
-  setOutput("#hitsHapticsValue", haptics);
-  for (const selector of ["#leftActuation", "#rightActuation"]) $(selector).textContent = actuation;
-  for (const selector of ["#leftRapid", "#rightRapid"]) $(selector).textContent = rapid;
-  for (const selector of ["#leftHaptics", "#rightHaptics"]) $(selector).textContent = haptics;
-  $("#hitsSummary").textContent = `${hitsTargetLabel()} / RT ${$("#hitsRapidEnabled").checked ? "ON" : "OFF"}`;
-  $("#hitsFramePreview").textContent = `${hitsPreviewFrames().length} frame(s) ready`;
+  for (const { side, actuation, rapid, haptics } of hitsSettings()) {
+    setOutput(`#${side}Actuation`, actuation);
+    setOutput(`#${side}Rapid`, rapid);
+    setOutput(`#${side}Haptics`, haptics);
+    $(`#${side}ApLine`).style.setProperty("--ap-position", `${clamp(actuation, 1, 10) * 10}%`);
+  }
 }
 
-function renderHitsPressure(rawValue) {
+function renderHitsPressure(rawValue, side = null) {
   const raw = clamp(Number(rawValue) || 0, 0, HITS_PRESSURE_MAX);
   state.pressureRaw = raw;
   const percent = Math.round((raw / HITS_PRESSURE_MAX) * 100);
-  $("#pressureRaw").textContent = `RAW ${raw}`;
+  const sides = side ? [side] : ["left", "right"];
+  $("#pressureRaw").textContent = `${side ? side.toUpperCase() : "RAW"} ${raw}`;
   $("#pressureValue").textContent = `${percent}%`;
-  $("#pressureFill").style.width = `${percent}%`;
+  for (const targetSide of sides) {
+    $(`#${targetSide}PressureFill`).style.height = `${percent}%`;
+  }
   $("#pressureHint").textContent = raw ? "押し込み検出中" : "リリース";
+}
+
+function parseHitsPressureFrame(frame) {
+  const values = Array.from(frame.parameters.slice(0, 4));
+  if (values[0] <= 1 && values[1] > 1 && values[1] <= HITS_PRESSURE_MAX) {
+    return { side: hitsSideFromIndex(values[0]), raw: values[1] };
+  }
+  if (values[1] <= 1 && values[0] > 1 && values[0] <= HITS_PRESSURE_MAX) {
+    return { side: hitsSideFromIndex(values[1]), raw: values[0] };
+  }
+  return { side: null, raw: values[0] };
 }
 
 function handleHitsPressureFrame(frame) {
   if (
-    frame.reportId !== REPORT.LONG ||
+    ![REPORT.SHORT, REPORT.LONG].includes(frame.reportId) ||
     !candidateDeviceIndexes().includes(frame.deviceIndex) ||
     frame.featureIndex !== HITS_FEATURE_INDEX ||
-    frame.functionId !== HITS_PRESSURE_FUNCTION ||
-    frame.softwareId !== 0x00
+    frame.functionId !== HITS_PRESSURE_FUNCTION
   ) {
     return false;
   }
-  renderHitsPressure(frame.parameters[0]);
+  const pressure = parseHitsPressureFrame(frame);
+  renderHitsPressure(pressure.raw, pressure.side);
   return true;
 }
 
@@ -338,9 +347,6 @@ function renderOnboardUnavailable() {
   const badge = $("#onboardBadge");
   badge.textContent = "UNAVAILABLE";
   badge.dataset.state = "error";
-  $("#profileStatus").textContent = "-";
-  $("#dpiSlotStatus").textContent = "-";
-  $("#onboardMeta").textContent = "-";
 }
 
 function renderOnboardState({ mode, profile, dpi, description }) {
@@ -348,9 +354,9 @@ function renderOnboardState({ mode, profile, dpi, description }) {
   const isOnboard = mode?.mode === ONBOARD_MODE.ONBOARD;
   badge.textContent = isOnboard ? "ON" : mode?.label?.toUpperCase() || "UNKNOWN";
   badge.dataset.state = isOnboard ? "ok" : "warn";
-  $("#profileStatus").textContent = `SLOT ${activeProfileIndexFromSector(profile?.sector) + 1}`;
-  $("#dpiSlotStatus").textContent = `DPI ${(dpi?.dpiIndex ?? selectedDpiSlot()) + 1}`;
-  $("#onboardMeta").textContent = `${description?.profileCount ?? 1} profile(s) / ${description?.sectorCount ?? "-"} sectors`;
+  badge.title = `${description?.profileCount ?? 1} profile(s), active ${activeProfileIndexFromSector(profile?.sector) + 1}, DPI ${
+    (dpi?.dpiIndex ?? activeDpiIndex()) + 1
+  }`;
 }
 
 function activeProfileIndexFromSector(sector) {
@@ -361,50 +367,14 @@ function activeProfileIndexFromSector(sector) {
 
 function selectedProfileIndex() {
   const count = Math.max(1, state.onboardProfiles.length || state.onboardDescription?.profileCount || 1);
-  const value = Number.parseInt($("#profileSlot").value || String(DEFAULT_PROFILE_INDEX), 10);
-  return clamp(Number.isFinite(value) ? value : DEFAULT_PROFILE_INDEX, 0, count - 1);
+  const active = clamp(Number.isInteger(state.activeProfileIndex) ? state.activeProfileIndex : DEFAULT_PROFILE_INDEX, 0, count - 1);
+  if (!state.onboardProfiles.length || state.onboardProfiles[active]?.enabled) return active;
+  const enabledIndex = state.onboardProfiles.findIndex((profile) => profile.enabled);
+  return enabledIndex === -1 ? active : enabledIndex;
 }
 
-function selectedDpiSlot() {
-  const value = Number.parseInt($("#dpiSlot").value || String(DEFAULT_DPI_SLOT), 10);
-  return clamp(Number.isFinite(value) ? value : DEFAULT_DPI_SLOT, 0, 15);
-}
-
-function updateProfileOptions(description, selected = DEFAULT_PROFILE_INDEX) {
-  const select = $("#profileSlot");
-  const profiles = state.onboardProfiles.length
-    ? state.onboardProfiles
-    : Array.from({ length: Math.max(1, description?.profileCount ?? 1) }, (_, index) => ({
-        profileIndex: index,
-        sector: index,
-        enabled: true,
-      }));
-  const count = profiles.length;
-  const nextValue = clamp(selected, 0, count - 1);
-  select.replaceChildren(
-    ...profiles.map((profile, index) => {
-      const option = document.createElement("option");
-      option.value = String(index);
-      option.textContent = `SLOT ${index + 1}`;
-      option.disabled = !profile.enabled;
-      return option;
-    }),
-  );
-  select.value = String(nextValue);
-}
-
-function updateDpiSlotOptions(selected = DEFAULT_DPI_SLOT) {
-  const select = $("#dpiSlot");
-  const count = Math.max(DEFAULT_DPI_SLOT_COUNT, selected + 1);
-  select.replaceChildren(
-    ...Array.from({ length: count }, (_, index) => {
-      const option = document.createElement("option");
-      option.value = String(index);
-      option.textContent = `DPI ${index + 1}`;
-      return option;
-    }),
-  );
-  select.value = String(clamp(selected, 0, count - 1));
+function activeDpiIndex() {
+  return clamp(Number.isInteger(state.currentDpiIndex) ? state.currentDpiIndex : DEFAULT_DPI_INDEX, 0, 15);
 }
 
 async function syncOnboardLiveState(driver) {
@@ -414,8 +384,8 @@ async function syncOnboardLiveState(driver) {
     driver.getCurrentProfile(),
     driver.getCurrentDpiIndex(),
   ]);
-  updateProfileOptions(state.onboardDescription, activeProfileIndexFromSector(profile.sector));
-  updateDpiSlotOptions(dpi.dpiIndex ?? DEFAULT_DPI_SLOT);
+  state.activeProfileIndex = activeProfileIndexFromSector(profile.sector);
+  state.currentDpiIndex = dpi.dpiIndex ?? DEFAULT_DPI_INDEX;
   renderOnboardState({ mode, profile, dpi, description: state.onboardDescription });
 }
 
@@ -430,7 +400,7 @@ async function ensureOnboardReady(driver) {
     await driver.setCurrentProfile((profileSector >> 8) & 0xff, profileSector & 0xff);
   } catch (error) {
     if (error.code !== HIDPP_INVALID_ARGUMENT) throw error;
-    log("profile slot selection skipped", {
+    log("profile activation skipped", {
       reason: "device rejected writable profile selection",
       featureIndex: error.frame?.error?.featureIndex,
       profileIndex,
@@ -439,7 +409,6 @@ async function ensureOnboardReady(driver) {
   }
   $("#onboardBadge").textContent = "ON";
   $("#onboardBadge").dataset.state = "ok";
-  $("#profileStatus").textContent = `SLOT ${profileIndex + 1}`;
 }
 
 async function withDriver(action, busyText) {
@@ -462,15 +431,52 @@ async function withDriver(action, busyText) {
   }
 }
 
+function isRetryableError(error) {
+  return error?.name === "HidppTimeoutError" || /timed out|timeout/i.test(error?.message ?? "");
+}
+
+async function retryOperation(label, action, options = {}) {
+  const maxAttempts = options.maxAttempts ?? 4;
+  const maxMs = options.maxMs ?? 9000;
+  const baseDelayMs = options.baseDelayMs ?? 220;
+  const started = performance.now();
+  let lastError = null;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      return await action(attempt);
+    } catch (error) {
+      lastError = error;
+      const elapsed = performance.now() - started;
+      if (!isRetryableError(error) || attempt >= maxAttempts || elapsed >= maxMs) {
+        throw error;
+      }
+      const waitMs = Math.min(1600, Math.round(baseDelayMs * 1.8 ** (attempt - 1)));
+      log(`${label} retry`, {
+        attempt,
+        nextAttempt: attempt + 1,
+        waitMs,
+        error: errorSummary(error),
+      });
+      setStatus(`${label} retry ${attempt + 1}/${maxAttempts}`, "busy");
+      await delay(waitMs);
+    }
+  }
+
+  throw lastError;
+}
+
 async function withOnboardMutation(action, busyText) {
   await withDriver(async (driver) => {
-    await ensureOnboardReady(driver);
-    await action(driver);
-    try {
-      await syncOnboardLiveState(driver);
-    } catch (error) {
-      log("live state refresh skipped", errorSummary(error));
-    }
+    await retryOperation(busyText ?? "operation", async () => {
+      await ensureOnboardReady(driver);
+      await action(driver);
+      try {
+        await syncOnboardLiveState(driver);
+      } catch (error) {
+        log("live state refresh skipped", errorSummary(error));
+      }
+    });
   }, busyText);
 }
 
@@ -624,10 +630,10 @@ async function writeSelectedSensorDpi(driver, sensorIndex, dpi) {
   let appliedToOnboardProfile = false;
   if (hasFeature(FEATURE.ONBOARD_PROFILES) && state.onboardDescription?.sectorSize) {
     const profileIndex = selectedProfileIndex();
-    const dpiIndex = selectedDpiSlot();
     try {
-      result.onboardProfile = await driver.setOnboardProfileDpi(profileIndex, dpiIndex, dpi, state.onboardDescription);
-      await driver.setCurrentDpiIndex(dpiIndex);
+      result.onboardProfile = await driver.setOnboardProfileDpiAll(profileIndex, dpi, state.onboardDescription);
+      await driver.setCurrentDpiIndex(DEFAULT_DPI_INDEX);
+      state.currentDpiIndex = DEFAULT_DPI_INDEX;
       state.extendedDpi = {
         sensorIndex,
         current: dpi,
@@ -638,6 +644,26 @@ async function writeSelectedSensorDpi(driver, sensorIndex, dpi) {
       appliedToOnboardProfile = true;
     } catch (error) {
       result.onboardProfile = { error: errorSummary(error) };
+    }
+  }
+
+  if (appliedToOnboardProfile && hasFeature(FEATURE.ADJUSTABLE_DPI_ADVANCED)) {
+    const sensor = selectedSensor();
+    try {
+      await driver.setExtendedDpi(sensorIndex, dpi, {
+        y: dpi,
+        lod: sensor?.lod ?? state.extendedDpi?.lod ?? 0x02,
+      });
+      result.liveAdvanced = "ok";
+    } catch (error) {
+      result.liveAdvanced = { error: errorSummary(error) };
+    }
+  } else if (appliedToOnboardProfile && hasFeature(FEATURE.ADJUSTABLE_DPI)) {
+    try {
+      await driver.setSensorDpi(sensorIndex, dpi);
+      result.liveStandard = "ok";
+    } catch (error) {
+      result.liveStandard = { error: errorSummary(error) };
     }
   }
 
@@ -807,8 +833,7 @@ function sensorDpiRange(sensor) {
 }
 
 function selectedSensor() {
-  const selectedIndex = Number($("#dpiSensorIndex").value || state.dpiSensors[0]?.index || 0);
-  return state.dpiSensors.find((item) => item.index === selectedIndex) ?? state.dpiSensors[0] ?? null;
+  return state.dpiSensors[0] ?? null;
 }
 
 function selectedSensorDpi() {
@@ -823,7 +848,6 @@ function syncDpiInputs(value) {
   const dpi = normalizeToStep(value, range);
   $("#sensorDpi").value = String(dpi);
   $("#sensorDpiInput").value = String(dpi);
-  setOutput("#sensorDpiValue", `${dpi}`);
   if ([...$("#dpiPreset").options].some((option) => option.value === String(dpi))) {
     $("#dpiPreset").value = String(dpi);
   }
@@ -831,22 +855,12 @@ function syncDpiInputs(value) {
 }
 
 function renderDpiControls() {
-  const sensorSelect = $("#dpiSensorIndex");
-  sensorSelect.replaceChildren(
-    ...state.dpiSensors.map((sensor) => {
-      const option = document.createElement("option");
-      option.value = String(sensor.index);
-      option.textContent = `Sensor ${sensor.index + 1}`;
-      return option;
-    }),
-  );
   if (!state.dpiSensors.length) {
     $("#dpiSensorMeta").textContent = "-";
     return;
   }
 
   const sensor = selectedSensor();
-  sensorSelect.value = String(sensor.index);
   const { list, min, max, step } = sensorDpiRange(sensor);
   const slider = $("#sensorDpi");
   const value = sensor.current || sensor.default || list[0] || 1600;
@@ -858,7 +872,7 @@ function renderDpiControls() {
   $("#sensorDpiInput").step = String(step);
 
   const presetSelect = $("#dpiPreset");
-  const presetOptions = list.length ? list : [Number(slider.value)];
+  const presetOptions = unique([...list, 400, 800, 1600, 3200, 4800, 6400]).filter((dpi) => dpi >= min && dpi <= max);
   presetSelect.replaceChildren(
     ...presetOptions.map((dpi) => {
       const option = document.createElement("option");
@@ -876,7 +890,7 @@ function renderCapturedDpiControls(advanced = null) {
   state.dpiSensors = [
     {
       index: advanced?.sensorIndex ?? 0,
-      list: [400, 800, 1600, 3200],
+      list: [400, 800, 1600, 3200, 4800, 6400],
       step: G_HUB_ADVANCED_DPI_RANGE.step,
       current,
       default: advanced?.default || 1600,
@@ -908,11 +922,25 @@ async function refreshAdvancedDpiControls(driver) {
 
 function reportRatesForChannel(channel) {
   const rates = state.reportRates[channel] ?? [];
-  return rates.length ? rates : [...FALLBACK_REPORT_RATES];
+  if (rates.length) return rates;
+  return channel === "wireless" ? [...FALLBACK_REPORT_RATES] : [...STANDARD_REPORT_RATES];
 }
 
 function rateByMs(channel, ms) {
   return reportRatesForChannel(channel).find((rate) => rate.ms === Number(ms)) ?? reportRatesForChannel(channel)[0];
+}
+
+function mergeReportRates(...groups) {
+  const byMs = new Map();
+  for (const rate of groups.flat()) {
+    const captured = FALLBACK_REPORT_RATES.find((item) => item.ms === rate.ms);
+    byMs.set(rate.ms, {
+      ...byMs.get(rate.ms),
+      ...rate,
+      capturedValue: rate.capturedValue ?? captured?.capturedValue,
+    });
+  }
+  return [...byMs.values()].sort((a, b) => a.ms - b.ms);
 }
 
 function renderReportRateChannel(channel, currentMs = null) {
@@ -930,19 +958,10 @@ function renderReportRateChannel(channel, currentMs = null) {
   );
   const current = rateByMs(channel, currentMs ?? state.currentReportRate[channel] ?? 1);
   if (!current) {
-    $(`#${prefix}ReportRateText`).textContent = "-";
     return;
   }
   state.currentReportRate[channel] = current.ms;
   select.value = String(current.ms);
-  const slider = $(`#${prefix}ReportRateSlider`);
-  const currentIndex = Math.max(0, rates.findIndex((rate) => rate.ms === current.ms));
-  slider.min = "0";
-  slider.max = String(Math.max(0, rates.length - 1));
-  slider.step = "1";
-  slider.value = String(currentIndex);
-  setOutput(`#${prefix}ReportRateValue`, `${current.hz} Hz`);
-  $(`#${prefix}ReportRateText`).textContent = `${current.hz} Hz`;
 }
 
 function renderReportRateControls(current = {}) {
@@ -950,16 +969,12 @@ function renderReportRateControls(current = {}) {
   renderReportRateChannel("wired", current.wired ?? current.ms ?? null);
 }
 
-function syncReportRateChannel(channel, indexOrMs, fromSlider = false) {
-  const rates = reportRatesForChannel(channel);
-  const rate = fromSlider ? rates[Number(indexOrMs)] : rateByMs(channel, Number(indexOrMs));
+function syncReportRateChannel(channel, ms) {
+  const rate = rateByMs(channel, Number(ms));
   if (!rate) return null;
   const prefix = channel === "wired" ? "wired" : "wireless";
   $(`#${prefix}ReportRateMs`).value = String(rate.ms);
-  $(`#${prefix}ReportRateSlider`).value = String(Math.max(0, rates.findIndex((item) => item.ms === rate.ms)));
   state.currentReportRate[channel] = rate.ms;
-  setOutput(`#${prefix}ReportRateValue`, `${rate.hz} Hz`);
-  $(`#${prefix}ReportRateText`).textContent = `${rate.hz} Hz`;
   return rate;
 }
 
@@ -974,7 +989,6 @@ function syncBhopInputs(value = selectedBhopTimeout()) {
   $("#bhopTimeout").value = String(timeout);
   $("#bhopTimeoutInput").value = String(timeout);
   setOutput("#bhopTimeoutValue", `${timeout}ミリ秒`);
-  $("#bhopStatus").textContent = enabled ? `${timeout}ミリ秒` : "OFF";
   $("#bhopTimeout").disabled = !enabled;
   $("#bhopTimeoutInput").disabled = !enabled;
   return state.bhop;
@@ -1000,16 +1014,16 @@ async function refreshConfigurableControls(driver) {
   }
   if (hasFeature(FEATURE.ADJUSTABLE_REPORT_RATE)) {
     const [list, current] = await Promise.all([driver.getReportRateList(), driver.getReportRate()]);
-    const rates = (list.rates.length ? list.rates : FALLBACK_REPORT_RATES).map((rate) => ({
-      ...rate,
-      capturedValue: FALLBACK_REPORT_RATES.find((item) => item.ms === rate.ms)?.capturedValue ?? rate.capturedValue,
-    }));
-    state.reportRates = { wired: rates, wireless: rates };
+    const standardRates = mergeReportRates(list.rates.length ? list.rates : STANDARD_REPORT_RATES);
+    state.reportRates = {
+      wired: standardRates,
+      wireless: mergeReportRates(FALLBACK_REPORT_RATES, standardRates),
+    };
     state.currentReportRate = { wired: current.ms || 1, wireless: current.ms || 1 };
     renderReportRateControls({ wired: current.ms || 1, wireless: current.ms || 1 });
   } else {
     state.reportRates = {
-      wired: [...FALLBACK_REPORT_RATES],
+      wired: [...STANDARD_REPORT_RATES],
       wireless: [...FALLBACK_REPORT_RATES],
     };
     renderReportRateControls(state.currentReportRate);
@@ -1026,7 +1040,6 @@ async function refreshAll(driver) {
   renderCapabilities();
 
   const onboardSupported = hasFeature(FEATURE.ONBOARD_PROFILES);
-  $("#onboardPanel").hidden = !onboardSupported;
   if (!onboardSupported) {
     renderOnboardUnavailable();
     log("on-board profiles feature 0x8100 is not exposed by this interface");
@@ -1042,8 +1055,8 @@ async function refreshAll(driver) {
       state.onboardProfiles = [];
       log("on-board profile sectors skipped", errorSummary(error));
     }
-    updateProfileOptions(state.onboardDescription, DEFAULT_PROFILE_INDEX);
-    updateDpiSlotOptions(DEFAULT_DPI_SLOT);
+    state.activeProfileIndex = selectedProfileIndex();
+    state.currentDpiIndex = DEFAULT_DPI_INDEX;
     await ensureOnboardReady(driver);
     await syncOnboardLiveState(driver);
     log("on-board memory mode enforced", {
@@ -1089,55 +1102,9 @@ async function connect() {
   }
 }
 
-async function setCurrentProfile() {
-  const profileIndex = selectedProfileIndex();
-  await withOnboardMutation(async () => {
-    log("profile slot requested", { memoryType: ONBOARD_MEMORY_TYPE.WRITEABLE, profileIndex });
-  }, "setting profile");
-}
-
-async function setDpiSlot() {
-  await withOnboardMutation(async (driver) => {
-    const dpiIndex = selectedDpiSlot();
-    await driver.setCurrentDpiIndex(dpiIndex);
-    log("DPI slot selected", { dpiIndex });
-  }, "setting DPI slot");
-}
-
-async function setReportRate(channel) {
-  await withOnboardMutation(async (driver) => {
-    const prefix = channel === "wired" ? "wired" : "wireless";
-    const ms = Number($(`#${prefix}ReportRateMs`).value);
-    const captured = await writeCapturedReportRate(driver, channel, ms);
-    let standard = null;
-    if (hasFeature(FEATURE.ADJUSTABLE_REPORT_RATE)) {
-      try {
-        await driver.setReportRateMs(ms);
-        standard = await driver.getReportRate();
-      } catch (error) {
-        standard = { error: errorSummary(error) };
-      }
-    }
-    renderReportRateChannel(channel, ms);
-    log(`${channel} report rate set`, { captured, standard });
-  }, `setting ${channel} report rate`);
-}
-
-async function setSensorDpi() {
-  await withOnboardMutation(async (driver) => {
-    const sensorIndex = Number($("#dpiSensorIndex").value || 0);
-    const dpi = selectedSensorDpi();
-    syncDpiInputs(dpi);
-    const result = await writeSelectedSensorDpi(driver, sensorIndex, dpi);
-    renderDpiControls();
-    syncDpiInputs(dpi);
-    log("sensor DPI set", { sensorIndex, dpi, ...result });
-  }, "setting sensor DPI");
-}
-
 async function writeHitsFrames(driver) {
   const frames = [];
-  for (const sideIndex of hitsSideIndexesForTarget()) {
+  for (const { sideIndex } of hitsSettings()) {
     const attempts = [];
     let accepted = null;
     for (const deviceIndex of candidateDeviceIndexes(activeDeviceIndex())) {
@@ -1174,32 +1141,15 @@ async function writeHitsFrames(driver) {
   return frames;
 }
 
-async function applyCapturedHits() {
-  await withOnboardMutation(async (driver) => {
-    const frames = await writeHitsFrames(driver);
-    log("HITS applied", { settings: buildHitsSettingsPatch(), frames });
-  }, "applying HITS");
-}
-
-async function applyCapturedBhop() {
-  await withOnboardMutation(async (driver) => {
-    const captured = await writeCapturedBhop(driver);
-    log("BHOP applied", captured);
-  }, "applying BHOP");
-}
-
 async function applyOnboardProfile() {
   await withOnboardMutation(async (driver) => {
     const applied = {
       profileIndex: selectedProfileIndex(),
-      dpiSlot: selectedDpiSlot(),
     };
-
-    await driver.setCurrentDpiIndex(applied.dpiSlot);
 
     if (hasDpiFeature() && state.dpiSensors.length) {
       applied.dpi = {
-        sensorIndex: Number($("#dpiSensorIndex").value || 0),
+        sensorIndex: selectedSensor()?.index ?? 0,
         dpi: selectedSensorDpi(),
       };
       syncDpiInputs(applied.dpi.dpi);
@@ -1214,8 +1164,12 @@ async function applyOnboardProfile() {
     if (hasFeature(FEATURE.ADJUSTABLE_REPORT_RATE)) {
       const currentMs = Number($("#wiredReportRateMs").value || $("#wirelessReportRateMs").value || 1);
       try {
-        await driver.setReportRateMs(currentMs);
-        applied.reportRate.standard = await driver.getReportRate();
+        if (currentMs >= 1) {
+          await driver.setReportRateMs(currentMs);
+          applied.reportRate.standard = await driver.getReportRate();
+        } else {
+          applied.reportRate.standard = "skipped for captured high-rate value";
+        }
       } catch (error) {
         applied.reportRate.standard = { error: errorSummary(error) };
       }
@@ -1232,15 +1186,15 @@ async function applyOnboardProfile() {
 $("#connect").addEventListener("click", connect);
 $("#refresh").addEventListener("click", () => withDriver(refreshAll, "refreshing"));
 $("#applyOnboardProfile").addEventListener("click", applyOnboardProfile);
-$("#setCurrentProfile").addEventListener("click", setCurrentProfile);
-$("#setDpiSlot").addEventListener("click", setDpiSlot);
-$("#setSensorDpi").addEventListener("click", setSensorDpi);
-$("#setWirelessReportRate").addEventListener("click", () => setReportRate("wireless"));
-$("#setWiredReportRate").addEventListener("click", () => setReportRate("wired"));
-$("#applyCapturedHits").addEventListener("click", applyCapturedHits);
-$("#applyCapturedBhop").addEventListener("click", applyCapturedBhop);
 
-for (const selector of ["#hitsTarget", "#hitsActuation", "#hitsRapidEnabled", "#hitsRapid", "#hitsHaptics"]) {
+for (const selector of [
+  "#leftHitsActuation",
+  "#leftHitsRapid",
+  "#leftHitsHaptics",
+  "#rightHitsActuation",
+  "#rightHitsRapid",
+  "#rightHitsHaptics",
+]) {
   $(selector).addEventListener("input", renderHitsModel);
   $(selector).addEventListener("change", renderHitsModel);
 }
@@ -1259,35 +1213,20 @@ $("#dpiPreset").addEventListener("change", () => {
     syncDpiInputs($("#dpiPreset").value);
   }
 });
-$("#dpiSensorIndex").addEventListener("change", renderDpiControls);
 $("#wirelessReportRateMs").addEventListener("change", () =>
   syncReportRateChannel("wireless", Number($("#wirelessReportRateMs").value)),
 );
 $("#wiredReportRateMs").addEventListener("change", () => syncReportRateChannel("wired", Number($("#wiredReportRateMs").value)));
-$("#wirelessReportRateSlider").addEventListener("input", () =>
-  syncReportRateChannel("wireless", Number($("#wirelessReportRateSlider").value), true),
-);
-$("#wiredReportRateSlider").addEventListener("input", () =>
-  syncReportRateChannel("wired", Number($("#wiredReportRateSlider").value), true),
-);
 $("#bhopEnabled").addEventListener("change", () => syncBhopInputs());
 $("#bhopTimeout").addEventListener("input", () => syncBhopInputs($("#bhopTimeout").value));
 $("#bhopTimeoutInput").addEventListener("input", () => syncBhopInputs($("#bhopTimeoutInput").value));
 $("#bhopTimeoutInput").addEventListener("change", () => syncBhopInputs($("#bhopTimeoutInput").value));
-$("#profileSlot").addEventListener("change", () => {
-  $("#profileStatus").textContent = `SLOT ${selectedProfileIndex() + 1}`;
-});
-$("#dpiSlot").addEventListener("change", () => {
-  $("#dpiSlotStatus").textContent = `DPI ${selectedDpiSlot() + 1}`;
-});
 
 if (!("hid" in navigator)) {
   setStatus("WebHID 非対応ブラウザです。Chrome/Edge/Vivaldi の localhost で開いてください。", "error");
 } else {
   setStatus("ready");
 }
-updateProfileOptions(null, DEFAULT_PROFILE_INDEX);
-updateDpiSlotOptions(DEFAULT_DPI_SLOT);
 renderCapabilities();
 renderReportRateControls(state.currentReportRate);
 renderBhopControls();
