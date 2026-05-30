@@ -270,22 +270,38 @@ class Hidpp20Transport {
     }
     const payload = new Uint8Array(payloadLength);
     payload.set(payloadBytes);
-    await this.device.sendReport(reportId, payload);
-    if (!options.waitForAny) return null;
+    let pending = null;
+    let response = null;
 
-    return new Promise((resolve, reject) => {
-      const pending = {
-        resolve,
-        reject,
-        match: () => true,
-      };
-      pending.timer = setTimeout(() => {
+    if (options.waitForAny) {
+      response = new Promise((resolve, reject) => {
+        pending = {
+          resolve,
+          reject,
+          match: options.match ?? (() => true),
+        };
+        pending.timer = setTimeout(() => {
+          const index = this._pending.indexOf(pending);
+          if (index !== -1) this._pending.splice(index, 1);
+          reject(new HidppTimeoutError());
+        }, options.timeoutMs ?? this.timeoutMs);
+        this._pending.push(pending);
+      });
+    }
+
+    try {
+      await this.device.sendReport(reportId, payload);
+    } catch (error) {
+      if (pending) {
+        clearTimeout(pending.timer);
         const index = this._pending.indexOf(pending);
         if (index !== -1) this._pending.splice(index, 1);
-        reject(new HidppTimeoutError());
-      }, options.timeoutMs ?? this.timeoutMs);
-      this._pending.push(pending);
-    });
+      }
+      throw error;
+    }
+
+    if (!response) return null;
+    return response;
   }
 }
 

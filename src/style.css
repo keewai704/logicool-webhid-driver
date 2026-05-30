@@ -428,10 +428,207 @@ label {
   overflow-wrap: anywhere;
 }
 
-.hits-grid {
+.hits-layout {
   display: grid;
-  grid-template-columns: 190px repeat(2, minmax(180px, 1fr));
+  grid-template-columns: minmax(260px, 340px) 1fr;
+  gap: 22px;
+}
+
+.hits-settings {
+  min-width: 0;
+}
+
+.hits-tabs {
+  display: grid;
+  gap: 4px;
+  margin-bottom: 18px;
+}
+
+.hits-tabs span {
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 900;
+}
+
+.hits-tabs span:first-child {
+  color: var(--accent);
+  text-decoration: underline;
+  text-underline-offset: 6px;
+}
+
+.panel-description {
+  margin: 0 0 18px;
+  color: #e4ebef;
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1.65;
+}
+
+.range-caption {
+  display: flex;
+  justify-content: space-between;
+  margin: 2px 0 14px;
+  color: #c3d1da;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.hits-stage {
+  min-width: 0;
+}
+
+.hits-stage-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
   gap: 16px;
+  border-bottom: 1px solid var(--line);
+  padding-bottom: 12px;
+}
+
+.hits-stage-heading h3 {
+  margin: 0;
+  font-size: 18px;
+  letter-spacing: 0;
+}
+
+.hits-stage-heading span,
+.pressure-panel strong {
+  color: var(--accent);
+  font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+  font-size: 13px;
+  font-weight: 900;
+}
+
+.hits-mouse-map {
+  display: grid;
+  grid-template-columns: minmax(116px, 150px) minmax(180px, 260px) minmax(116px, 150px);
+  align-items: center;
+  justify-content: center;
+  gap: 18px;
+  min-height: 330px;
+}
+
+.hit-callout {
+  display: grid;
+  gap: 7px;
+  border: 1px solid #32404a;
+  border-radius: 6px;
+  padding: 12px;
+  background: #0b0f13;
+}
+
+.hit-callout strong {
+  color: var(--accent);
+  font-size: 12px;
+}
+
+.hit-callout span {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  color: #dbe6ec;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.hit-callout b {
+  color: #ffffff;
+  font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+  font-size: 18px;
+}
+
+.hits-mouse-body {
+  position: relative;
+  width: min(100%, 236px);
+  aspect-ratio: 0.62;
+  margin: 0 auto;
+  border: 2px solid #d7e4eb;
+  border-radius: 92px 92px 70px 70px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.92), #d7dce0 42%, #eff3f5 100%),
+    #f2f4f5;
+  box-shadow: inset 0 10px 28px rgba(255, 255, 255, 0.46), 0 22px 58px rgba(0, 0, 0, 0.38);
+}
+
+.hits-button {
+  position: absolute;
+  top: 7%;
+  width: 48%;
+  height: 30%;
+  border: 3px solid var(--accent);
+  background: rgba(0, 166, 255, 0.45);
+}
+
+.hits-button.left {
+  left: 2%;
+  border-radius: 74px 0 10px 12px;
+}
+
+.hits-button.right {
+  right: 2%;
+  border-radius: 0 74px 12px 10px;
+}
+
+.hits-wheel {
+  position: absolute;
+  top: 12%;
+  left: 50%;
+  z-index: 1;
+  width: 18px;
+  height: 64px;
+  border: 3px solid #0a0e12;
+  border-radius: 16px;
+  background: #1e2830;
+  transform: translateX(-50%);
+}
+
+.hits-logo {
+  position: absolute;
+  left: 50%;
+  bottom: 17%;
+  color: #15191c;
+  font-size: 54px;
+  font-weight: 900;
+  transform: translateX(-50%);
+}
+
+.pressure-panel {
+  display: grid;
+  gap: 10px;
+  border-top: 1px solid var(--line);
+  padding-top: 14px;
+}
+
+.pressure-panel div:first-child {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.pressure-panel span,
+.pressure-panel small {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.pressure-track {
+  overflow: hidden;
+  height: 12px;
+  border-radius: 999px;
+  background: #0a0d10;
+}
+
+.pressure-track span {
+  display: block;
+  width: 0%;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--accent), var(--accent-2));
+  transition: width 80ms linear;
 }
 
 .toggle-field {
@@ -511,7 +708,8 @@ label {
 
   .controls,
   .panel-footer,
-  .hits-grid {
+  .hits-layout,
+  .hits-mouse-map {
     display: grid;
     grid-template-columns: 1fr;
   }

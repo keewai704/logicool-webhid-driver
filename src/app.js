@@ -14,6 +14,12 @@ const DEFAULT_DEVICE_INDEX = 0x01;
 const DEFAULT_PROFILE_INDEX = 0;
 const DEFAULT_DPI_SLOT = 0;
 const DEFAULT_DPI_SLOT_COUNT = 5;
+const HITS_FEATURE_INDEX = 0x0c;
+const HITS_WRITE_FUNCTION = 0x01;
+const HITS_PRESSURE_FUNCTION = 0x00;
+const HITS_SOFTWARE_ID = 0x0d;
+const HITS_PRESSURE_MAX = 5;
+const HIDPP_INVALID_ARGUMENT = 0x02;
 
 const state = {
   driver: null,
@@ -22,6 +28,7 @@ const state = {
   onboardDescription: null,
   dpiSensors: [],
   reportRates: [],
+  pressureRaw: 0,
 };
 
 const SUPERSTRIKE_HITS_MODEL = Object.freeze({
@@ -32,8 +39,8 @@ const SUPERSTRIKE_HITS_MODEL = Object.freeze({
   capturedHidpp: {
     featureIndex: "0x0c",
     functionId: "0x1",
-    softwareId: "0xb",
-    hitsTemplate: "11 01 0c 1b <side:00|01> <actuation*4> <rapid*4+enabled> <haptics*4> 00...",
+    softwareId: "0xd",
+    hitsTemplate: "11 01 0c 1d <side:00|01> <actuation*4> <rapid*4+enabled> <haptics*4> 00...",
   },
 });
 
@@ -93,8 +100,8 @@ function buildCapturedHitsPayload(sideIndex) {
   const payload = new Uint8Array(19);
   payload.set([
     DEFAULT_DEVICE_INDEX,
-    0x0c,
-    0x1b,
+    HITS_FEATURE_INDEX,
+    (HITS_WRITE_FUNCTION << 4) | HITS_SOFTWARE_ID,
     sideIndex & 0xff,
     Math.max(0, Math.min(0xff, actuation * 4)),
     Math.max(0, Math.min(0xff, rapid * 4 + (rapidEnabled ? 1 : 0))),
@@ -114,8 +121,35 @@ function renderHitsModel() {
   setOutput("#hitsActuationValue", actuation);
   setOutput("#hitsRapidValue", rapid);
   setOutput("#hitsHapticsValue", haptics);
+  for (const selector of ["#leftActuation", "#rightActuation"]) $(selector).textContent = actuation;
+  for (const selector of ["#leftRapid", "#rightRapid"]) $(selector).textContent = rapid;
+  for (const selector of ["#leftHaptics", "#rightHaptics"]) $(selector).textContent = haptics;
   $("#hitsSummary").textContent = `${hitsTargetLabel()} / RT ${$("#hitsRapidEnabled").checked ? "ON" : "OFF"}`;
   $("#hitsFramePreview").textContent = `${hitsPreviewFrames().length} frame(s) ready`;
+}
+
+function renderHitsPressure(rawValue) {
+  const raw = clamp(Number(rawValue) || 0, 0, HITS_PRESSURE_MAX);
+  state.pressureRaw = raw;
+  const percent = Math.round((raw / HITS_PRESSURE_MAX) * 100);
+  $("#pressureRaw").textContent = `RAW ${raw}`;
+  $("#pressureValue").textContent = `${percent}%`;
+  $("#pressureFill").style.width = `${percent}%`;
+  $("#pressureHint").textContent = raw ? "押し込み検出中" : "リリース";
+}
+
+function handleHitsPressureFrame(frame) {
+  if (
+    frame.reportId !== REPORT.LONG ||
+    frame.deviceIndex !== DEFAULT_DEVICE_INDEX ||
+    frame.featureIndex !== HITS_FEATURE_INDEX ||
+    frame.functionId !== HITS_PRESSURE_FUNCTION ||
+    frame.softwareId !== 0x00
+  ) {
+    return false;
+  }
+  renderHitsPressure(frame.parameters[0]);
+  return true;
 }
 
 function setStatus(text, kind = "idle") {
@@ -235,7 +269,16 @@ async function ensureOnboardReady(driver) {
   }
   const profileIndex = selectedProfileIndex();
   await driver.setOnboardMode(ONBOARD_MODE.ONBOARD);
-  await driver.setCurrentProfile(ONBOARD_MEMORY_TYPE.WRITEABLE, profileIndex);
+  try {
+    await driver.setCurrentProfile(ONBOARD_MEMORY_TYPE.WRITEABLE, profileIndex);
+  } catch (error) {
+    if (error.code !== HIDPP_INVALID_ARGUMENT) throw error;
+    log("profile slot selection skipped", {
+      reason: "device rejected writable profile selection",
+      featureIndex: error.frame?.error?.featureIndex,
+      profileIndex,
+    });
+  }
   $("#onboardBadge").textContent = "ON";
   $("#onboardBadge").dataset.state = "ok";
   $("#profileStatus").textContent = `SLOT ${profileIndex + 1}`;
@@ -408,6 +451,7 @@ async function connect() {
     const driver = await LogitechHidpp20Driver.fromDevice(device, { deviceIndex: DEFAULT_DEVICE_INDEX });
     state.driver = driver;
     state.unsubscribe = driver.onReport((frame) => {
+      if (handleHitsPressureFrame(frame)) return;
       log("report", { raw: frame.hex });
     });
     await refreshAll(driver);
@@ -426,7 +470,7 @@ async function connect() {
 async function setCurrentProfile() {
   const profileIndex = selectedProfileIndex();
   await withOnboardMutation(async () => {
-    log("profile slot selected", { memoryType: ONBOARD_MEMORY_TYPE.WRITEABLE, profileIndex });
+    log("profile slot requested", { memoryType: ONBOARD_MEMORY_TYPE.WRITEABLE, profileIndex });
   }, "setting profile");
 }
 
@@ -463,7 +507,26 @@ async function writeHitsFrames(driver) {
   const frames = [];
   for (const sideIndex of hitsSideIndexesForTarget()) {
     const payload = buildCapturedHitsPayload(sideIndex);
-    const response = await driver.rawReport(REPORT.LONG, payload, { waitForAny: true, timeoutMs: 1500 });
+    const response = await driver.rawReport(REPORT.LONG, payload, {
+      waitForAny: true,
+      timeoutMs: 1500,
+      match: (frame) => {
+        if (frame.deviceIndex !== DEFAULT_DEVICE_INDEX) return false;
+        if (frame.error) {
+          return (
+            frame.error.featureIndex === HITS_FEATURE_INDEX &&
+            frame.error.functionId === HITS_WRITE_FUNCTION &&
+            frame.error.softwareId === HITS_SOFTWARE_ID
+          );
+        }
+        return (
+          frame.featureIndex === HITS_FEATURE_INDEX &&
+          frame.functionId === HITS_WRITE_FUNCTION &&
+          frame.softwareId === HITS_SOFTWARE_ID &&
+          frame.parameters[0] === sideIndex
+        );
+      },
+    });
     frames.push({
       sideIndex,
       report: `11 ${bytesToHex(payload)}`,
@@ -561,3 +624,4 @@ updateProfileOptions(null, DEFAULT_PROFILE_INDEX);
 updateDpiSlotOptions(DEFAULT_DPI_SLOT);
 renderCapabilities();
 renderHitsModel();
+renderHitsPressure(0);
