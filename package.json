@@ -1,0 +1,9 @@
+{
+  "name": "logicool-webhid-driver",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node tests/hidpp.test.mjs"
+  }
+}

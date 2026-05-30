@@ -1,0 +1,294 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Logicool HID++ Web Driver</title>
+    <link rel="stylesheet" href="./src/style.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <header class="topbar">
+        <div>
+          <h1>Logicool HID++ Web Driver</h1>
+          <p id="status" data-kind="idle">ready</p>
+        </div>
+        <div class="toolbar">
+          <label>
+            Device index
+            <input id="deviceIndex" value="01" inputmode="text" />
+          </label>
+          <button id="connect" type="button">Connect</button>
+          <button id="refresh" type="button">Refresh</button>
+          <label class="check">
+            <input id="forceOnboardWrites" type="checkbox" checked />
+            On-board
+          </label>
+        </div>
+      </header>
+
+      <section class="grid">
+        <section class="panel span-4">
+          <h2>Device</h2>
+          <dl class="facts">
+            <dt>Name</dt>
+            <dd id="deviceName">-</dd>
+            <dt>VID:PID</dt>
+            <dd id="deviceIds">-</dd>
+            <dt>HID++</dt>
+            <dd id="protocol">-</dd>
+          </dl>
+          <pre id="collections" class="mono compact"></pre>
+          <p class="minor">Last report: <code id="lastReport">-</code></p>
+        </section>
+
+        <section id="onboardPanel" class="panel span-8" hidden>
+          <h2>On-board Memory</h2>
+          <div class="controls">
+            <label>
+              Mode
+              <select id="mode">
+                <option value="1">onboard</option>
+                <option value="2">host</option>
+              </select>
+            </label>
+            <button id="setMode" type="button">Set mode</button>
+            <label>
+              DPI index
+              <select id="dpiIndex">
+                <option value="0">0</option>
+                <option value="1">1</option>
+                <option value="2">2</option>
+                <option value="3">3</option>
+                <option value="4">4</option>
+              </select>
+            </label>
+            <button id="setDpiIndex" type="button">Set DPI</button>
+            <label>
+              Profile
+              <input id="profileIndex" value="0" inputmode="numeric" />
+            </label>
+            <button id="setCurrentProfile" type="button">Set profile</button>
+          </div>
+          <p class="minor">Current: <code id="currentProfile">-</code></p>
+          <pre id="onboardDescription" class="mono"></pre>
+          <div class="controls">
+            <label>
+              Memory
+              <select id="memoryType">
+                <option value="0">writeable</option>
+                <option value="1">ROM</option>
+              </select>
+            </label>
+            <label>
+              Page
+              <input id="page" value="0" inputmode="numeric" />
+            </label>
+            <label>
+              Size
+              <input id="sectorSize" value="256" inputmode="numeric" />
+            </label>
+            <button id="readSector" type="button">Read page</button>
+          </div>
+          <pre id="sectorDump" class="mono dump"></pre>
+        </section>
+
+        <section id="dpiPanel" class="panel span-4" hidden>
+          <h2>Sensor DPI</h2>
+          <div class="controls">
+            <label>
+              Sensor
+              <select id="dpiSensorIndex"></select>
+            </label>
+            <label>
+              Preset
+              <select id="dpiPreset"></select>
+            </label>
+            <label class="slider-field wide-slider">
+              <span>DPI</span>
+              <output id="sensorDpiValue">1600</output>
+              <input id="sensorDpi" type="range" min="100" max="25600" step="50" value="1600" />
+            </label>
+            <button id="setSensorDpi" type="button">Apply DPI</button>
+          </div>
+          <pre id="dpiSensors" class="mono"></pre>
+        </section>
+
+        <section id="reportRatePanel" class="panel span-4" hidden>
+          <h2>Report Rate</h2>
+          <div class="controls">
+            <label>
+              Rate
+              <select id="reportRateMs">
+                <option value="1">1000 Hz</option>
+                <option value="2">500 Hz</option>
+                <option value="4">250 Hz</option>
+                <option value="8">125 Hz</option>
+              </select>
+            </label>
+            <label class="slider-field">
+              <span>Index</span>
+              <output id="reportRateValue">1000 Hz</output>
+              <input id="reportRateSlider" type="range" min="0" max="3" step="1" value="0" />
+            </label>
+            <button id="setReportRate" type="button">Set rate</button>
+          </div>
+          <pre id="reportRateState" class="mono"></pre>
+        </section>
+
+        <section class="panel span-4">
+          <h2>Superstrike HITS</h2>
+          <div class="controls">
+            <label>
+              Target
+              <select id="hitsTarget">
+                <option value="both">left + right</option>
+                <option value="left">left</option>
+                <option value="right">right</option>
+              </select>
+            </label>
+            <label class="slider-field">
+              <span>Actuation</span>
+              <output id="hitsActuationValue">3</output>
+              <input id="hitsActuation" type="range" min="1" max="10" step="1" value="3" />
+            </label>
+            <label class="check">
+              <input id="hitsRapidEnabled" type="checkbox" checked />
+              Rapid trigger
+            </label>
+            <label class="slider-field">
+              <span>Rapid</span>
+              <output id="hitsRapidValue">1</output>
+              <input id="hitsRapid" type="range" min="1" max="5" step="1" value="1" />
+            </label>
+            <label class="slider-field">
+              <span>Haptics</span>
+              <output id="hitsHapticsValue">1</output>
+              <input id="hitsHaptics" type="range" min="0" max="5" step="1" value="1" />
+            </label>
+            <button id="applyCapturedHits" type="button">Apply HITS</button>
+          </div>
+          <pre id="hitsModel" class="mono compact"></pre>
+        </section>
+
+        <section class="panel span-8">
+          <h2>Feature Table</h2>
+          <table id="features">
+            <thead>
+              <tr>
+                <th>Index</th>
+                <th>ID</th>
+                <th>Name</th>
+                <th>Version</th>
+                <th>Flags</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </section>
+
+        <section class="panel span-12">
+          <h2>USBPcap HID++ Replay</h2>
+          <div class="controls">
+            <label class="file">
+              Capture
+              <input id="pcapFile" type="file" accept=".pcap,.cap" />
+            </label>
+            <button id="parsePcap" type="button">Parse</button>
+            <label class="check">
+              <input id="replayWait" type="checkbox" checked />
+              Wait
+            </label>
+            <button id="replayFrames" type="button">Replay selected</button>
+          </div>
+          <table id="pcapFrames">
+            <thead>
+              <tr>
+                <th></th>
+                <th>#</th>
+                <th>Dir</th>
+                <th>Report</th>
+                <th>Dev</th>
+                <th>Feature</th>
+                <th>Fn</th>
+                <th>Params</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </section>
+
+        <section class="panel span-6">
+          <h2>Raw Feature Call</h2>
+          <div class="controls">
+            <label>
+              Feature ID
+              <input id="rawFeature" value="8100" inputmode="text" />
+            </label>
+            <label>
+              Function
+              <input id="rawFunction" value="00" inputmode="text" />
+            </label>
+          </div>
+          <label class="wide">
+            Params
+            <input id="rawParams" value="" inputmode="text" />
+          </label>
+          <button id="rawCall" type="button">Send</button>
+        </section>
+
+        <section class="panel span-6">
+          <h2>Raw Report</h2>
+          <div class="controls">
+            <label>
+              Report
+              <select id="rawReportId">
+                <option value="10">0x10</option>
+                <option value="11">0x11</option>
+                <option value="12">0x12</option>
+              </select>
+            </label>
+            <label class="check">
+              <input id="waitRaw" type="checkbox" checked />
+              Wait
+            </label>
+          </div>
+          <label class="wide">
+            Payload
+            <input id="rawReportPayload" value="01 00 08 00 01" inputmode="text" />
+          </label>
+          <button id="rawReport" type="button">Send raw</button>
+        </section>
+
+        <section class="panel span-6 danger">
+          <h2>Write Memory</h2>
+          <div class="controls">
+            <label>
+              Page
+              <input id="writePage" value="0" inputmode="numeric" />
+            </label>
+            <label>
+              Offset
+              <input id="writeOffset" value="0" inputmode="numeric" />
+            </label>
+          </div>
+          <label class="wide">
+            Bytes
+            <input id="writeBytes" value="" inputmode="text" />
+          </label>
+          <label class="wide">
+            Arm
+            <input id="writeArm" value="" inputmode="text" />
+          </label>
+          <button id="writeRun" type="button">Write</button>
+        </section>
+
+        <section class="panel span-6">
+          <h2>Log</h2>
+          <pre id="log" class="mono log"></pre>
+        </section>
+      </section>
+    </main>
+    <script type="module" src="./src/app.js"></script>
+  </body>
+</html>
