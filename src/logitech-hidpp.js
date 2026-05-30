@@ -51,10 +51,13 @@ const ONBOARD_MEMORY_TYPE = Object.freeze({
 });
 
 const DEFAULT_FILTERS = Object.freeze([
+  { vendorId: 0x046d, productId: 0xc0a8 },
   { vendorId: 0x046d, productId: 0xc54d },
   { vendorId: 0x046d, productId: 0xab24 },
   { vendorId: 0x046d },
 ]);
+
+const DIRECT_WIRED_PRODUCT_IDS = Object.freeze(new Set([0xc0a8]));
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -329,9 +332,28 @@ class LogitechHidpp20Driver {
   }
 
   static async fromDevice(device, options = {}) {
-    const transport = new Hidpp20Transport(device, options);
+    const transport = new Hidpp20Transport(device, {
+      ...options,
+      deviceIndex: options.deviceIndex ?? LogitechHidpp20Driver.defaultDeviceIndex(device),
+    });
     await transport.open();
     return new LogitechHidpp20Driver(transport);
+  }
+
+  static defaultDeviceIndex(device) {
+    return DIRECT_WIRED_PRODUCT_IDS.has(device?.productId) ? 0xff : 0x01;
+  }
+
+  get device() {
+    return this.transport.device;
+  }
+
+  get deviceIndex() {
+    return this.transport.deviceIndex;
+  }
+
+  get productId() {
+    return this.transport.device?.productId;
   }
 
   onReport(listener) {

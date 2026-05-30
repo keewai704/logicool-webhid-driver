@@ -9,11 +9,32 @@ import {
 } from "./logitech-hidpp.js";
 
 const $ = (selector) => document.querySelector(selector);
+const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-const DEFAULT_DEVICE_INDEX = 0x01;
+const DEFAULT_RECEIVER_DEVICE_INDEX = 0x01;
+const DEFAULT_WIRED_DEVICE_INDEX = 0xff;
 const DEFAULT_PROFILE_INDEX = 0;
 const DEFAULT_DPI_SLOT = 0;
 const DEFAULT_DPI_SLOT_COUNT = 5;
+const DIRECT_WIRED_PRODUCT_ID = 0xc0a8;
+const G_HUB_ADVANCED_DPI_RANGE = Object.freeze({ min: 100, max: 32000, step: 100 });
+const FALLBACK_REPORT_RATES = Object.freeze([
+  { ms: 1, hz: 1000, capturedValue: 0x03 },
+  { ms: 2, hz: 500, capturedValue: 0x02 },
+  { ms: 4, hz: 250, capturedValue: 0x01 },
+  { ms: 8, hz: 125, capturedValue: 0x00 },
+]);
+const CAPTURED_ADVANCED_DPI_FEATURE_INDEX = 0x09;
+const CAPTURED_ADVANCED_DPI_SET_FUNCTION = 0x06;
+const CAPTURED_ADVANCED_DPI_COMMIT_FUNCTION = 0x07;
+const CAPTURED_REPORT_RATE_FEATURE_INDEX = 0x0d;
+const CAPTURED_REPORT_RATE_FUNCTION = 0x03;
+const CAPTURED_RECEIVER_SOFTWARE_ID = 0x0d;
+const CAPTURED_WIRED_SOFTWARE_ID = 0x0b;
+const BHOP_FEATURE_INDEX = 0x0b;
+const BHOP_WRITE_FUNCTION = 0x02;
+const BHOP_SOFTWARE_ID = 0x0d;
+const BHOP_TIMEOUT_RANGE = Object.freeze({ min: 100, max: 1000, step: 100 });
 const HITS_FEATURE_INDEX = 0x0c;
 const HITS_WRITE_FUNCTION = 0x01;
 const HITS_PRESSURE_FUNCTION = 0x00;
@@ -27,7 +48,18 @@ const state = {
   features: [],
   onboardDescription: null,
   dpiSensors: [],
-  reportRates: [],
+  reportRates: {
+    wired: [...FALLBACK_REPORT_RATES],
+    wireless: [...FALLBACK_REPORT_RATES],
+  },
+  currentReportRate: {
+    wired: 1,
+    wireless: 1,
+  },
+  bhop: {
+    enabled: false,
+    timeout: 100,
+  },
   pressureRaw: 0,
 };
 
@@ -46,6 +78,54 @@ const SUPERSTRIKE_HITS_MODEL = Object.freeze({
 
 function clamp(value, min, max) {
   return Math.min(max, Math.max(min, value));
+}
+
+function normalizeToStep(value, { min, max, step }) {
+  const numeric = Number(value);
+  const safeValue = Number.isFinite(numeric) ? numeric : min;
+  const snapped = Math.round((safeValue - min) / step) * step + min;
+  return clamp(snapped, min, max);
+}
+
+function writeU16BE(bytes, offset, value) {
+  bytes[offset] = (value >> 8) & 0xff;
+  bytes[offset + 1] = value & 0xff;
+}
+
+function unique(items) {
+  return [...new Set(items.filter((item) => Number.isInteger(item)))];
+}
+
+function activeDeviceIndex() {
+  return state.driver?.deviceIndex ?? DEFAULT_RECEIVER_DEVICE_INDEX;
+}
+
+function isDirectWiredDevice(driver = state.driver) {
+  return driver?.productId === DIRECT_WIRED_PRODUCT_ID;
+}
+
+function softwareIdForDeviceIndex(deviceIndex) {
+  return deviceIndex === DEFAULT_WIRED_DEVICE_INDEX ? CAPTURED_WIRED_SOFTWARE_ID : CAPTURED_RECEIVER_SOFTWARE_ID;
+}
+
+function candidateDeviceIndexes(preferred = activeDeviceIndex()) {
+  return unique([preferred, DEFAULT_RECEIVER_DEVICE_INDEX, DEFAULT_WIRED_DEVICE_INDEX]);
+}
+
+function channelDeviceCandidates(channel, driver = state.driver) {
+  if (channel === "wired") {
+    return candidateDeviceIndexes(isDirectWiredDevice(driver) ? DEFAULT_WIRED_DEVICE_INDEX : activeDeviceIndex());
+  }
+  return candidateDeviceIndexes(DEFAULT_RECEIVER_DEVICE_INDEX);
+}
+
+function buildShortPayload(deviceIndex, featureIndex, functionId, softwareId, params = []) {
+  const payload = new Uint8Array(6);
+  payload[0] = deviceIndex & 0xff;
+  payload[1] = featureIndex & 0xff;
+  payload[2] = ((functionId & 0x0f) << 4) | (softwareId & 0x0f);
+  payload.set(params.slice(0, 3), 3);
+  return payload;
 }
 
 function setOutput(selector, value) {
@@ -92,14 +172,14 @@ function buildHitsSettingsPatch() {
   };
 }
 
-function buildCapturedHitsPayload(sideIndex) {
+function buildCapturedHitsPayload(sideIndex, deviceIndex = activeDeviceIndex()) {
   const actuation = Number($("#hitsActuation").value);
   const rapid = Number($("#hitsRapid").value);
   const rapidEnabled = $("#hitsRapidEnabled").checked;
   const haptics = Number($("#hitsHaptics").value);
   const payload = new Uint8Array(19);
   payload.set([
-    DEFAULT_DEVICE_INDEX,
+    deviceIndex,
     HITS_FEATURE_INDEX,
     (HITS_WRITE_FUNCTION << 4) | HITS_SOFTWARE_ID,
     sideIndex & 0xff,
@@ -141,7 +221,7 @@ function renderHitsPressure(rawValue) {
 function handleHitsPressureFrame(frame) {
   if (
     frame.reportId !== REPORT.LONG ||
-    frame.deviceIndex !== DEFAULT_DEVICE_INDEX ||
+    !candidateDeviceIndexes().includes(frame.deviceIndex) ||
     frame.featureIndex !== HITS_FEATURE_INDEX ||
     frame.functionId !== HITS_PRESSURE_FUNCTION ||
     frame.softwareId !== 0x00
@@ -179,7 +259,10 @@ function renderCapabilities() {
     { label: "ON-BOARD", supported: hasFeature(FEATURE.ONBOARD_PROFILES) },
     { label: "DPI", supported: hasFeature(FEATURE.ADJUSTABLE_DPI) },
     { label: "REPORT RATE", supported: hasFeature(FEATURE.ADJUSTABLE_REPORT_RATE) },
+    { label: "WIRELESS", supported: true },
+    { label: "WIRED", supported: true },
     { label: "HITS", supported: true },
+    { label: "BHOP", supported: true },
   ];
   $("#capabilityList").replaceChildren(
     ...capabilities.map((item) => {
@@ -312,12 +395,288 @@ async function withOnboardMutation(action, busyText) {
   }, busyText);
 }
 
+function errorSummary(error) {
+  return {
+    message: error.message,
+    code: error.code,
+    frame: error.frame?.hex,
+  };
+}
+
+function capturedFrameMatcher(deviceIndex, featureIndex, functionId, softwareId) {
+  return (frame) => {
+    if (frame.deviceIndex !== deviceIndex) return false;
+    if (frame.error) {
+      return (
+        frame.error.featureIndex === featureIndex &&
+        frame.error.functionId === functionId &&
+        frame.error.softwareId === softwareId
+      );
+    }
+    return (
+      frame.featureIndex === featureIndex &&
+      frame.functionId === functionId &&
+      frame.softwareId === softwareId
+    );
+  };
+}
+
+function capturedFeatureMatcher(deviceIndex, featureIndex) {
+  return (frame) => {
+    if (frame.deviceIndex !== deviceIndex) return false;
+    if (frame.error) return frame.error.featureIndex === featureIndex;
+    return frame.featureIndex === featureIndex;
+  };
+}
+
+async function sendCapturedShort(driver, { deviceIndex, featureIndex, functionId, softwareId, params, timeoutMs = 700 }) {
+  const payload = buildShortPayload(deviceIndex, featureIndex, functionId, softwareId, params);
+  const response = await driver.rawReport(REPORT.SHORT, payload, {
+    waitForAny: true,
+    timeoutMs,
+    match: capturedFrameMatcher(deviceIndex, featureIndex, functionId, softwareId),
+  });
+  return {
+    report: `10 ${bytesToHex(payload)}`,
+    response: response?.hex,
+  };
+}
+
+function buildCapturedAdvancedDpiPayload(deviceIndex, softwareId, functionId, sensorIndex, dpi) {
+  const payload = new Uint8Array(19);
+  payload[0] = deviceIndex & 0xff;
+  payload[1] = CAPTURED_ADVANCED_DPI_FEATURE_INDEX;
+  payload[2] = ((functionId & 0x0f) << 4) | (softwareId & 0x0f);
+  payload[3] = sensorIndex & 0xff;
+  if (functionId === CAPTURED_ADVANCED_DPI_SET_FUNCTION) {
+    writeU16BE(payload, 4, dpi);
+    writeU16BE(payload, 6, dpi);
+    payload[8] = 0x02;
+  } else {
+    payload[4] = 0x03;
+    payload[5] = 0x00;
+  }
+  return payload;
+}
+
+async function writeCapturedAdvancedDpi(driver, sensorIndex, dpi) {
+  const attempts = [];
+  const normalizedDpi = normalizeToStep(dpi, sensorDpiRange(selectedSensor()));
+  for (const deviceIndex of candidateDeviceIndexes(activeDeviceIndex())) {
+    const softwareId = softwareIdForDeviceIndex(deviceIndex);
+    const setPayload = buildCapturedAdvancedDpiPayload(
+      deviceIndex,
+      softwareId,
+      CAPTURED_ADVANCED_DPI_SET_FUNCTION,
+      sensorIndex,
+      normalizedDpi,
+    );
+    const commitPayload = buildCapturedAdvancedDpiPayload(
+      deviceIndex,
+      softwareId,
+      CAPTURED_ADVANCED_DPI_COMMIT_FUNCTION,
+      sensorIndex,
+      normalizedDpi,
+    );
+    try {
+      await driver.rawReport(REPORT.LONG, setPayload, {
+        waitForAny: true,
+        timeoutMs: 550,
+        match: capturedFeatureMatcher(deviceIndex, CAPTURED_ADVANCED_DPI_FEATURE_INDEX),
+      });
+      await delay(25);
+      await driver.rawReport(REPORT.LONG, commitPayload, {
+        waitForAny: true,
+        timeoutMs: 550,
+        match: capturedFeatureMatcher(deviceIndex, CAPTURED_ADVANCED_DPI_FEATURE_INDEX),
+      });
+      attempts.push({
+        deviceIndex,
+        softwareId,
+        dpi: normalizedDpi,
+        set: `11 ${bytesToHex(setPayload)}`,
+        commit: `11 ${bytesToHex(commitPayload)}`,
+        acknowledged: true,
+      });
+      return attempts;
+    } catch (error) {
+      attempts.push({
+        deviceIndex,
+        softwareId,
+        dpi: normalizedDpi,
+        set: `11 ${bytesToHex(setPayload)}`,
+        commit: `11 ${bytesToHex(commitPayload)}`,
+        error: errorSummary(error),
+      });
+    }
+  }
+  const fallbackIndex = activeDeviceIndex();
+  const fallbackSoftwareId = softwareIdForDeviceIndex(fallbackIndex);
+  const setPayload = buildCapturedAdvancedDpiPayload(
+    fallbackIndex,
+    fallbackSoftwareId,
+    CAPTURED_ADVANCED_DPI_SET_FUNCTION,
+    sensorIndex,
+    normalizedDpi,
+  );
+  const commitPayload = buildCapturedAdvancedDpiPayload(
+    fallbackIndex,
+    fallbackSoftwareId,
+    CAPTURED_ADVANCED_DPI_COMMIT_FUNCTION,
+    sensorIndex,
+    normalizedDpi,
+  );
+  await driver.rawReport(REPORT.LONG, setPayload);
+  await delay(25);
+  await driver.rawReport(REPORT.LONG, commitPayload);
+  attempts.push({
+    deviceIndex: fallbackIndex,
+    softwareId: fallbackSoftwareId,
+    dpi: normalizedDpi,
+    set: `11 ${bytesToHex(setPayload)}`,
+    commit: `11 ${bytesToHex(commitPayload)}`,
+    acknowledged: false,
+  });
+  return attempts;
+}
+
+async function writeCapturedReportRate(driver, channel, ms) {
+  const rate = rateByMs(channel, ms);
+  const attempts = [];
+  for (const deviceIndex of channelDeviceCandidates(channel, driver)) {
+    const softwareId = channel === "wired" ? softwareIdForDeviceIndex(deviceIndex) : CAPTURED_RECEIVER_SOFTWARE_ID;
+    const payload = buildShortPayload(deviceIndex, CAPTURED_REPORT_RATE_FEATURE_INDEX, CAPTURED_REPORT_RATE_FUNCTION, softwareId, [
+      rate.capturedValue,
+      0x00,
+      0x00,
+    ]);
+    try {
+      const response = await driver.rawReport(REPORT.SHORT, payload, {
+        waitForAny: true,
+        timeoutMs: 650,
+        match: capturedFeatureMatcher(deviceIndex, CAPTURED_REPORT_RATE_FEATURE_INDEX),
+      });
+      return {
+        channel,
+        ms: rate.ms,
+        hz: rate.hz,
+        deviceIndex,
+        softwareId,
+        report: `10 ${bytesToHex(payload)}`,
+        response: response?.hex,
+      };
+    } catch (error) {
+      attempts.push({
+        deviceIndex,
+        softwareId,
+        report: `10 ${bytesToHex(payload)}`,
+        error: errorSummary(error),
+      });
+    }
+  }
+
+  const fallbackIndex = channelDeviceCandidates(channel, driver)[0] ?? activeDeviceIndex();
+  const fallbackSoftwareId = channel === "wired" ? softwareIdForDeviceIndex(fallbackIndex) : CAPTURED_RECEIVER_SOFTWARE_ID;
+  const fallbackPayload = buildShortPayload(
+    fallbackIndex,
+    CAPTURED_REPORT_RATE_FEATURE_INDEX,
+    CAPTURED_REPORT_RATE_FUNCTION,
+    fallbackSoftwareId,
+    [rate.capturedValue, 0x00, 0x00],
+  );
+  await driver.rawReport(REPORT.SHORT, fallbackPayload);
+  return {
+    channel,
+    ms: rate.ms,
+    hz: rate.hz,
+    deviceIndex: fallbackIndex,
+    softwareId: fallbackSoftwareId,
+    report: `10 ${bytesToHex(fallbackPayload)}`,
+    acknowledged: false,
+    attempts,
+  };
+}
+
+async function writeCapturedBhop(driver) {
+  const { enabled, timeout } = syncBhopInputs();
+  const encodedTimeout = enabled ? timeout / 10 : 0;
+  const attempts = [];
+  const candidates = unique([DEFAULT_RECEIVER_DEVICE_INDEX, activeDeviceIndex(), DEFAULT_WIRED_DEVICE_INDEX]);
+  for (const deviceIndex of candidates) {
+    const softwareIds = unique([BHOP_SOFTWARE_ID, softwareIdForDeviceIndex(deviceIndex)]);
+    for (const softwareId of softwareIds) {
+      try {
+        const frame = await sendCapturedShort(driver, {
+          deviceIndex,
+          featureIndex: BHOP_FEATURE_INDEX,
+          functionId: BHOP_WRITE_FUNCTION,
+          softwareId,
+          params: [encodedTimeout, 0x00, 0x00],
+          timeoutMs: 700,
+        });
+        return {
+          enabled,
+          timeout,
+          encodedTimeout,
+          deviceIndex,
+          softwareId,
+          ...frame,
+        };
+      } catch (error) {
+        attempts.push({ deviceIndex, softwareId, error: errorSummary(error) });
+      }
+    }
+  }
+
+  const fallbackIndex = DEFAULT_RECEIVER_DEVICE_INDEX;
+  const payload = buildShortPayload(fallbackIndex, BHOP_FEATURE_INDEX, BHOP_WRITE_FUNCTION, BHOP_SOFTWARE_ID, [
+    encodedTimeout,
+    0x00,
+    0x00,
+  ]);
+  await driver.rawReport(REPORT.SHORT, payload);
+  return {
+    enabled,
+    timeout,
+    encodedTimeout,
+    deviceIndex: fallbackIndex,
+    softwareId: BHOP_SOFTWARE_ID,
+    report: `10 ${bytesToHex(payload)}`,
+    acknowledged: false,
+    attempts,
+  };
+}
+
 function sensorDpiRange(sensor) {
   const list = [...(sensor?.list ?? [])].filter(Boolean).sort((a, b) => a - b);
-  const min = list[0] ?? 100;
-  const max = list[list.length - 1] ?? 25600;
-  const step = sensor?.step || 50;
+  const min = G_HUB_ADVANCED_DPI_RANGE.min;
+  const max = Math.max(G_HUB_ADVANCED_DPI_RANGE.max, list[list.length - 1] ?? 0);
+  const step = G_HUB_ADVANCED_DPI_RANGE.step;
   return { list, min, max, step };
+}
+
+function selectedSensor() {
+  const selectedIndex = Number($("#dpiSensorIndex").value || state.dpiSensors[0]?.index || 0);
+  return state.dpiSensors.find((item) => item.index === selectedIndex) ?? state.dpiSensors[0] ?? null;
+}
+
+function selectedSensorDpi() {
+  const sensor = selectedSensor();
+  const range = sensorDpiRange(sensor);
+  return normalizeToStep($("#sensorDpiInput").value || $("#sensorDpi").value, range);
+}
+
+function syncDpiInputs(value) {
+  const sensor = selectedSensor();
+  const range = sensorDpiRange(sensor);
+  const dpi = normalizeToStep(value, range);
+  $("#sensorDpi").value = String(dpi);
+  $("#sensorDpiInput").value = String(dpi);
+  setOutput("#sensorDpiValue", `${dpi}`);
+  if ([...$("#dpiPreset").options].some((option) => option.value === String(dpi))) {
+    $("#dpiPreset").value = String(dpi);
+  }
+  return dpi;
 }
 
 function renderDpiControls() {
@@ -335,8 +694,7 @@ function renderDpiControls() {
     return;
   }
 
-  const selectedIndex = Number(sensorSelect.value || state.dpiSensors[0].index);
-  const sensor = state.dpiSensors.find((item) => item.index === selectedIndex) ?? state.dpiSensors[0];
+  const sensor = selectedSensor();
   sensorSelect.value = String(sensor.index);
   const { list, min, max, step } = sensorDpiRange(sensor);
   const slider = $("#sensorDpi");
@@ -344,8 +702,9 @@ function renderDpiControls() {
   slider.min = String(min);
   slider.max = String(max);
   slider.step = String(step);
-  slider.value = String(clamp(value, min, max));
-  setOutput("#sensorDpiValue", slider.value);
+  $("#sensorDpiInput").min = String(min);
+  $("#sensorDpiInput").max = String(max);
+  $("#sensorDpiInput").step = String(step);
 
   const presetSelect = $("#dpiPreset");
   const presetOptions = list.length ? list : [Number(slider.value)];
@@ -357,14 +716,25 @@ function renderDpiControls() {
       return option;
     }),
   );
-  if (presetOptions.includes(Number(slider.value))) presetSelect.value = slider.value;
+  syncDpiInputs(value);
   $("#dpiSensorMeta").textContent = `${min}-${max} DPI / ${step} step`;
 }
 
-function renderReportRateControls(currentMs = null) {
-  const select = $("#reportRateMs");
+function reportRatesForChannel(channel) {
+  const rates = state.reportRates[channel] ?? [];
+  return rates.length ? rates : [...FALLBACK_REPORT_RATES];
+}
+
+function rateByMs(channel, ms) {
+  return reportRatesForChannel(channel).find((rate) => rate.ms === Number(ms)) ?? reportRatesForChannel(channel)[0];
+}
+
+function renderReportRateChannel(channel, currentMs = null) {
+  const prefix = channel === "wired" ? "wired" : "wireless";
+  const rates = reportRatesForChannel(channel);
+  const select = $(`#${prefix}ReportRateMs`);
   select.replaceChildren(
-    ...state.reportRates.map((rate, index) => {
+    ...rates.map((rate, index) => {
       const option = document.createElement("option");
       option.value = String(rate.ms);
       option.textContent = `${rate.hz} Hz`;
@@ -372,20 +742,67 @@ function renderReportRateControls(currentMs = null) {
       return option;
     }),
   );
-  const current = state.reportRates.find((rate) => rate.ms === currentMs) ?? state.reportRates[0];
+  const current = rateByMs(channel, currentMs ?? state.currentReportRate[channel] ?? 1);
   if (!current) {
-    $("#reportRateText").textContent = "-";
+    $(`#${prefix}ReportRateText`).textContent = "-";
     return;
   }
+  state.currentReportRate[channel] = current.ms;
   select.value = String(current.ms);
-  const slider = $("#reportRateSlider");
-  const currentIndex = Math.max(0, state.reportRates.findIndex((rate) => rate.ms === current.ms));
+  const slider = $(`#${prefix}ReportRateSlider`);
+  const currentIndex = Math.max(0, rates.findIndex((rate) => rate.ms === current.ms));
   slider.min = "0";
-  slider.max = String(Math.max(0, state.reportRates.length - 1));
+  slider.max = String(Math.max(0, rates.length - 1));
   slider.step = "1";
   slider.value = String(currentIndex);
-  setOutput("#reportRateValue", `${current.hz} Hz`);
-  $("#reportRateText").textContent = `${current.hz} Hz`;
+  setOutput(`#${prefix}ReportRateValue`, `${current.hz} Hz`);
+  $(`#${prefix}ReportRateText`).textContent = `${current.hz} Hz`;
+}
+
+function renderReportRateControls(current = {}) {
+  renderReportRateChannel("wireless", current.wireless ?? current.ms ?? null);
+  renderReportRateChannel("wired", current.wired ?? current.ms ?? null);
+}
+
+function syncReportRateChannel(channel, indexOrMs, fromSlider = false) {
+  const rates = reportRatesForChannel(channel);
+  const rate = fromSlider ? rates[Number(indexOrMs)] : rateByMs(channel, Number(indexOrMs));
+  if (!rate) return null;
+  const prefix = channel === "wired" ? "wired" : "wireless";
+  $(`#${prefix}ReportRateMs`).value = String(rate.ms);
+  $(`#${prefix}ReportRateSlider`).value = String(Math.max(0, rates.findIndex((item) => item.ms === rate.ms)));
+  state.currentReportRate[channel] = rate.ms;
+  setOutput(`#${prefix}ReportRateValue`, `${rate.hz} Hz`);
+  $(`#${prefix}ReportRateText`).textContent = `${rate.hz} Hz`;
+  return rate;
+}
+
+function selectedBhopTimeout() {
+  return normalizeToStep($("#bhopTimeoutInput").value || $("#bhopTimeout").value, BHOP_TIMEOUT_RANGE);
+}
+
+function syncBhopInputs(value = selectedBhopTimeout()) {
+  const timeout = normalizeToStep(value, BHOP_TIMEOUT_RANGE);
+  const enabled = $("#bhopEnabled").checked;
+  state.bhop = { enabled, timeout };
+  $("#bhopTimeout").value = String(timeout);
+  $("#bhopTimeoutInput").value = String(timeout);
+  setOutput("#bhopTimeoutValue", `${timeout}ミリ秒`);
+  $("#bhopStatus").textContent = enabled ? `${timeout}ミリ秒` : "OFF";
+  $("#bhopTimeout").disabled = !enabled;
+  $("#bhopTimeoutInput").disabled = !enabled;
+  return state.bhop;
+}
+
+function renderBhopControls() {
+  $("#bhopTimeout").min = String(BHOP_TIMEOUT_RANGE.min);
+  $("#bhopTimeout").max = String(BHOP_TIMEOUT_RANGE.max);
+  $("#bhopTimeout").step = String(BHOP_TIMEOUT_RANGE.step);
+  $("#bhopTimeoutInput").min = String(BHOP_TIMEOUT_RANGE.min);
+  $("#bhopTimeoutInput").max = String(BHOP_TIMEOUT_RANGE.max);
+  $("#bhopTimeoutInput").step = String(BHOP_TIMEOUT_RANGE.step);
+  $("#bhopEnabled").checked = state.bhop.enabled;
+  syncBhopInputs(state.bhop.timeout);
 }
 
 async function refreshConfigurableControls(driver) {
@@ -395,16 +812,21 @@ async function refreshConfigurableControls(driver) {
   }
   if (hasFeature(FEATURE.ADJUSTABLE_REPORT_RATE)) {
     const [list, current] = await Promise.all([driver.getReportRateList(), driver.getReportRate()]);
-    state.reportRates = list.rates.length
-      ? list.rates
-      : [
-          { ms: 1, hz: 1000 },
-          { ms: 2, hz: 500 },
-          { ms: 4, hz: 250 },
-          { ms: 8, hz: 125 },
-        ];
-    renderReportRateControls(current.ms || 1);
+    const rates = (list.rates.length ? list.rates : FALLBACK_REPORT_RATES).map((rate) => ({
+      ...rate,
+      capturedValue: FALLBACK_REPORT_RATES.find((item) => item.ms === rate.ms)?.capturedValue ?? rate.capturedValue,
+    }));
+    state.reportRates = { wired: rates, wireless: rates };
+    state.currentReportRate = { wired: current.ms || 1, wireless: current.ms || 1 };
+    renderReportRateControls({ wired: current.ms || 1, wireless: current.ms || 1 });
+  } else {
+    state.reportRates = {
+      wired: [...FALLBACK_REPORT_RATES],
+      wireless: [...FALLBACK_REPORT_RATES],
+    };
+    renderReportRateControls(state.currentReportRate);
   }
+  renderBhopControls();
   renderHitsModel();
 }
 
@@ -435,8 +857,8 @@ async function refreshAll(driver) {
 
   const dpiSupported = hasFeature(FEATURE.ADJUSTABLE_DPI);
   $("#dpiPanel").hidden = !dpiSupported;
-  const reportRateSupported = hasFeature(FEATURE.ADJUSTABLE_REPORT_RATE);
-  $("#reportRatePanel").hidden = !reportRateSupported;
+  $("#reportRatePanel").hidden = false;
+  $("#bhopPanel").hidden = false;
   await refreshConfigurableControls(driver);
 }
 
@@ -448,7 +870,7 @@ async function connect() {
     if (state.unsubscribe) state.unsubscribe();
     if (state.driver) await state.driver.close();
 
-    const driver = await LogitechHidpp20Driver.fromDevice(device, { deviceIndex: DEFAULT_DEVICE_INDEX });
+    const driver = await LogitechHidpp20Driver.fromDevice(device);
     state.driver = driver;
     state.unsubscribe = driver.onReport((frame) => {
       if (handleHitsPressureFrame(frame)) return;
@@ -482,57 +904,84 @@ async function setDpiSlot() {
   }, "setting DPI slot");
 }
 
-async function setReportRate() {
+async function setReportRate(channel) {
   await withOnboardMutation(async (driver) => {
-    const ms = Number($("#reportRateMs").value);
-    await driver.setReportRateMs(ms);
-    const current = await driver.getReportRate();
-    renderReportRateControls(current.ms);
-    log("report rate set", current);
-  }, "setting report rate");
+    const prefix = channel === "wired" ? "wired" : "wireless";
+    const ms = Number($(`#${prefix}ReportRateMs`).value);
+    const captured = await writeCapturedReportRate(driver, channel, ms);
+    let standard = null;
+    if (hasFeature(FEATURE.ADJUSTABLE_REPORT_RATE)) {
+      try {
+        await driver.setReportRateMs(ms);
+        standard = await driver.getReportRate();
+      } catch (error) {
+        standard = { error: errorSummary(error) };
+      }
+    }
+    renderReportRateChannel(channel, ms);
+    log(`${channel} report rate set`, { captured, standard });
+  }, `setting ${channel} report rate`);
 }
 
 async function setSensorDpi() {
   await withOnboardMutation(async (driver) => {
     const sensorIndex = Number($("#dpiSensorIndex").value || 0);
-    const dpi = Number($("#sensorDpi").value);
-    await driver.setSensorDpi(sensorIndex, dpi);
-    state.dpiSensors = await driver.getDpiSensors();
+    const dpi = selectedSensorDpi();
+    syncDpiInputs(dpi);
+    const result = {};
+    if (hasFeature(FEATURE.ADJUSTABLE_DPI)) {
+      try {
+        await driver.setSensorDpi(sensorIndex, dpi);
+        result.standard = "ok";
+      } catch (error) {
+        result.standard = { error: errorSummary(error) };
+      }
+    }
+    result.capturedAdvanced = await writeCapturedAdvancedDpi(driver, sensorIndex, dpi);
+    if (hasFeature(FEATURE.ADJUSTABLE_DPI)) {
+      state.dpiSensors = await driver.getDpiSensors();
+    }
     renderDpiControls();
-    log("sensor DPI set", { sensorIndex, dpi });
+    syncDpiInputs(dpi);
+    log("sensor DPI set", { sensorIndex, dpi, ...result });
   }, "setting sensor DPI");
 }
 
 async function writeHitsFrames(driver) {
   const frames = [];
   for (const sideIndex of hitsSideIndexesForTarget()) {
-    const payload = buildCapturedHitsPayload(sideIndex);
-    const response = await driver.rawReport(REPORT.LONG, payload, {
-      waitForAny: true,
-      timeoutMs: 1500,
-      match: (frame) => {
-        if (frame.deviceIndex !== DEFAULT_DEVICE_INDEX) return false;
-        if (frame.error) {
-          return (
-            frame.error.featureIndex === HITS_FEATURE_INDEX &&
-            frame.error.functionId === HITS_WRITE_FUNCTION &&
-            frame.error.softwareId === HITS_SOFTWARE_ID
-          );
-        }
-        return (
-          frame.featureIndex === HITS_FEATURE_INDEX &&
-          frame.functionId === HITS_WRITE_FUNCTION &&
-          frame.softwareId === HITS_SOFTWARE_ID &&
-          frame.parameters[0] === sideIndex
-        );
-      },
-    });
-    frames.push({
-      sideIndex,
-      report: `11 ${bytesToHex(payload)}`,
-      response: response?.hex,
-    });
-    await new Promise((resolve) => setTimeout(resolve, 40));
+    const attempts = [];
+    let accepted = null;
+    for (const deviceIndex of candidateDeviceIndexes(activeDeviceIndex())) {
+      const payload = buildCapturedHitsPayload(sideIndex, deviceIndex);
+      try {
+        const response = await driver.rawReport(REPORT.LONG, payload, {
+          waitForAny: true,
+          timeoutMs: 900,
+          match: (frame) => {
+            if (!capturedFrameMatcher(deviceIndex, HITS_FEATURE_INDEX, HITS_WRITE_FUNCTION, HITS_SOFTWARE_ID)(frame)) {
+              return false;
+            }
+            return frame.error || frame.parameters[0] === sideIndex;
+          },
+        });
+        accepted = {
+          sideIndex,
+          report: `11 ${bytesToHex(payload)}`,
+          response: response?.hex,
+        };
+        break;
+      } catch (error) {
+        attempts.push({
+          sideIndex,
+          deviceIndex,
+          report: `11 ${bytesToHex(payload)}`,
+          error: errorSummary(error),
+        });
+      }
+    }
+    frames.push(accepted ?? { sideIndex, acknowledged: false, attempts });
+    await delay(40);
   }
   return frames;
 }
@@ -542,6 +991,13 @@ async function applyCapturedHits() {
     const frames = await writeHitsFrames(driver);
     log("HITS applied", { settings: buildHitsSettingsPatch(), frames });
   }, "applying HITS");
+}
+
+async function applyCapturedBhop() {
+  await withOnboardMutation(async (driver) => {
+    const captured = await writeCapturedBhop(driver);
+    log("BHOP applied", captured);
+  }, "applying BHOP");
 }
 
 async function applyOnboardProfile() {
@@ -556,19 +1012,34 @@ async function applyOnboardProfile() {
     if (hasFeature(FEATURE.ADJUSTABLE_DPI) && state.dpiSensors.length) {
       applied.dpi = {
         sensorIndex: Number($("#dpiSensorIndex").value || 0),
-        dpi: Number($("#sensorDpi").value),
+        dpi: selectedSensorDpi(),
       };
-      await driver.setSensorDpi(applied.dpi.sensorIndex, applied.dpi.dpi);
+      syncDpiInputs(applied.dpi.dpi);
+      try {
+        await driver.setSensorDpi(applied.dpi.sensorIndex, applied.dpi.dpi);
+        applied.dpi.standard = "ok";
+      } catch (error) {
+        applied.dpi.standard = { error: errorSummary(error) };
+      }
+      applied.dpi.capturedAdvanced = await writeCapturedAdvancedDpi(driver, applied.dpi.sensorIndex, applied.dpi.dpi);
     }
 
-    if (hasFeature(FEATURE.ADJUSTABLE_REPORT_RATE) && state.reportRates.length) {
-      applied.reportRate = {
-        ms: Number($("#reportRateMs").value),
-        hz: Math.round(1000 / Number($("#reportRateMs").value)),
-      };
-      await driver.setReportRateMs(applied.reportRate.ms);
+    applied.reportRate = {
+      wireless: await writeCapturedReportRate(driver, "wireless", Number($("#wirelessReportRateMs").value)),
+      wired: await writeCapturedReportRate(driver, "wired", Number($("#wiredReportRateMs").value)),
+    };
+
+    if (hasFeature(FEATURE.ADJUSTABLE_REPORT_RATE)) {
+      const currentMs = Number($("#wiredReportRateMs").value || $("#wirelessReportRateMs").value || 1);
+      try {
+        await driver.setReportRateMs(currentMs);
+        applied.reportRate.standard = await driver.getReportRate();
+      } catch (error) {
+        applied.reportRate.standard = { error: errorSummary(error) };
+      }
     }
 
+    applied.bhop = await writeCapturedBhop(driver);
     applied.hits = buildHitsSettingsPatch();
     applied.hitsFrames = await writeHitsFrames(driver);
     await refreshConfigurableControls(driver);
@@ -582,8 +1053,10 @@ $("#applyOnboardProfile").addEventListener("click", applyOnboardProfile);
 $("#setCurrentProfile").addEventListener("click", setCurrentProfile);
 $("#setDpiSlot").addEventListener("click", setDpiSlot);
 $("#setSensorDpi").addEventListener("click", setSensorDpi);
-$("#setReportRate").addEventListener("click", setReportRate);
+$("#setWirelessReportRate").addEventListener("click", () => setReportRate("wireless"));
+$("#setWiredReportRate").addEventListener("click", () => setReportRate("wired"));
 $("#applyCapturedHits").addEventListener("click", applyCapturedHits);
+$("#applyCapturedBhop").addEventListener("click", applyCapturedBhop);
 
 for (const selector of ["#hitsTarget", "#hitsActuation", "#hitsRapidEnabled", "#hitsRapid", "#hitsHaptics"]) {
   $(selector).addEventListener("input", renderHitsModel);
@@ -591,23 +1064,34 @@ for (const selector of ["#hitsTarget", "#hitsActuation", "#hitsRapidEnabled", "#
 }
 
 $("#sensorDpi").addEventListener("input", () => {
-  setOutput("#sensorDpiValue", $("#sensorDpi").value);
+  syncDpiInputs($("#sensorDpi").value);
+});
+$("#sensorDpiInput").addEventListener("input", () => {
+  syncDpiInputs($("#sensorDpiInput").value);
+});
+$("#sensorDpiInput").addEventListener("change", () => {
+  syncDpiInputs($("#sensorDpiInput").value);
 });
 $("#dpiPreset").addEventListener("change", () => {
   if ($("#dpiPreset").value) {
-    $("#sensorDpi").value = $("#dpiPreset").value;
-    setOutput("#sensorDpiValue", $("#dpiPreset").value);
+    syncDpiInputs($("#dpiPreset").value);
   }
 });
 $("#dpiSensorIndex").addEventListener("change", renderDpiControls);
-$("#reportRateMs").addEventListener("change", () => renderReportRateControls(Number($("#reportRateMs").value)));
-$("#reportRateSlider").addEventListener("input", () => {
-  const rate = state.reportRates[Number($("#reportRateSlider").value)];
-  if (!rate) return;
-  $("#reportRateMs").value = String(rate.ms);
-  setOutput("#reportRateValue", `${rate.hz} Hz`);
-  $("#reportRateText").textContent = `${rate.hz} Hz`;
-});
+$("#wirelessReportRateMs").addEventListener("change", () =>
+  syncReportRateChannel("wireless", Number($("#wirelessReportRateMs").value)),
+);
+$("#wiredReportRateMs").addEventListener("change", () => syncReportRateChannel("wired", Number($("#wiredReportRateMs").value)));
+$("#wirelessReportRateSlider").addEventListener("input", () =>
+  syncReportRateChannel("wireless", Number($("#wirelessReportRateSlider").value), true),
+);
+$("#wiredReportRateSlider").addEventListener("input", () =>
+  syncReportRateChannel("wired", Number($("#wiredReportRateSlider").value), true),
+);
+$("#bhopEnabled").addEventListener("change", () => syncBhopInputs());
+$("#bhopTimeout").addEventListener("input", () => syncBhopInputs($("#bhopTimeout").value));
+$("#bhopTimeoutInput").addEventListener("input", () => syncBhopInputs($("#bhopTimeoutInput").value));
+$("#bhopTimeoutInput").addEventListener("change", () => syncBhopInputs($("#bhopTimeoutInput").value));
 $("#profileSlot").addEventListener("change", () => {
   $("#profileStatus").textContent = `SLOT ${selectedProfileIndex() + 1}`;
 });
@@ -623,5 +1107,7 @@ if (!("hid" in navigator)) {
 updateProfileOptions(null, DEFAULT_PROFILE_INDEX);
 updateDpiSlotOptions(DEFAULT_DPI_SLOT);
 renderCapabilities();
+renderReportRateControls(state.currentReportRate);
+renderBhopControls();
 renderHitsModel();
 renderHitsPressure(0);

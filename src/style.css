@@ -413,6 +413,42 @@ label {
   font-weight: 800;
 }
 
+.compact-slider {
+  margin-top: 10px;
+}
+
+.rate-stack {
+  display: grid;
+  gap: 14px;
+}
+
+.rate-row {
+  display: grid;
+  gap: 10px;
+  border: 1px solid #29323b;
+  border-radius: 6px;
+  padding: 12px;
+  background: #0d1115;
+}
+
+.rate-row-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.rate-row-heading strong {
+  color: #e8f2f7;
+  font-size: 13px;
+}
+
+.number-field input,
+input[type="number"] {
+  font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+  font-weight: 800;
+}
+
 .panel-footer {
   justify-content: space-between;
   margin-top: 16px;

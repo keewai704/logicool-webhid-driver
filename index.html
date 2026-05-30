@@ -98,10 +98,14 @@
                 プリセット
                 <select id="dpiPreset"></select>
               </label>
+              <label>
+                数値入力
+                <input id="sensorDpiInput" type="number" min="100" max="32000" step="100" value="1600" inputmode="numeric" />
+              </label>
             </div>
             <label class="slider-field">
               <span>DPI</span>
-              <input id="sensorDpi" type="range" min="100" max="25600" step="50" value="1600" />
+              <input id="sensorDpi" type="range" min="100" max="32000" step="100" value="1600" />
             </label>
             <div class="panel-footer">
               <span id="dpiSensorMeta" class="setting-meta">-</span>
@@ -115,26 +119,85 @@
                 <span class="eyebrow">POLLING</span>
                 <h2>レポートレート</h2>
               </div>
-              <output id="reportRateValue" class="value-readout">1000 Hz</output>
+              <span class="meta-pill">WIRED / WIRELESS</span>
             </div>
+            <div class="rate-stack">
+              <div class="rate-row">
+                <div class="rate-row-heading">
+                  <strong>ワイヤレス レポートレート</strong>
+                  <output id="wirelessReportRateValue" class="value-readout">1000 Hz</output>
+                </div>
+                <div class="controls">
+                  <label>
+                    レート
+                    <select id="wirelessReportRateMs">
+                      <option value="1">1000 Hz</option>
+                      <option value="2">500 Hz</option>
+                      <option value="4">250 Hz</option>
+                      <option value="8">125 Hz</option>
+                    </select>
+                  </label>
+                  <button id="setWirelessReportRate" type="button">適用</button>
+                </div>
+                <label class="slider-field compact-slider">
+                  <span>RATE</span>
+                  <input id="wirelessReportRateSlider" type="range" min="0" max="3" step="1" value="0" />
+                </label>
+                <span id="wirelessReportRateText" class="setting-meta">-</span>
+              </div>
+              <div class="rate-row">
+                <div class="rate-row-heading">
+                  <strong>有線レポートレート</strong>
+                  <output id="wiredReportRateValue" class="value-readout">1000 Hz</output>
+                </div>
+                <div class="controls">
+                  <label>
+                    レート
+                    <select id="wiredReportRateMs">
+                      <option value="1">1000 Hz</option>
+                      <option value="2">500 Hz</option>
+                      <option value="4">250 Hz</option>
+                      <option value="8">125 Hz</option>
+                    </select>
+                  </label>
+                  <button id="setWiredReportRate" type="button">適用</button>
+                </div>
+                <label class="slider-field compact-slider">
+                  <span>RATE</span>
+                  <input id="wiredReportRateSlider" type="range" min="0" max="3" step="1" value="0" />
+                </label>
+                <span id="wiredReportRateText" class="setting-meta">-</span>
+              </div>
+            </div>
+          </section>
+
+          <section id="bhopPanel" class="panel span-6 bhop-panel">
+            <div class="panel-heading">
+              <div>
+                <span class="eyebrow">BHOP</span>
+                <h2>スクロールホイール</h2>
+              </div>
+              <span id="bhopStatus" class="meta-pill">OFF</span>
+            </div>
+            <p class="panel-description">BHOPモードは、スクロールホイールを誤ってぶつけてしまった場合に、意図しないジャンプを防ぐのに役立ちます。有効にすると、スライダーで定義された時間枠内に2回目のスクロールイベントが発生しない限り、マウスは最初のスクロールイベントを無視します。</p>
+            <label class="toggle-field">
+              <input id="bhopEnabled" type="checkbox" />
+              <span>BHOPモードの有効化</span>
+            </label>
             <div class="controls">
               <label>
-                レート
-                <select id="reportRateMs">
-                  <option value="1">1000 Hz</option>
-                  <option value="2">500 Hz</option>
-                  <option value="4">250 Hz</option>
-                  <option value="8">125 Hz</option>
-                </select>
+                感度
+                <input id="bhopTimeoutInput" type="number" min="100" max="1000" step="100" value="100" inputmode="numeric" />
               </label>
             </div>
             <label class="slider-field">
-              <span>RATE</span>
-              <input id="reportRateSlider" type="range" min="0" max="3" step="1" value="0" />
+              <span>BHOP感度</span>
+              <output id="bhopTimeoutValue">100ミリ秒</output>
+              <input id="bhopTimeout" type="range" min="100" max="1000" step="100" value="100" />
             </label>
             <div class="panel-footer">
-              <span id="reportRateText" class="setting-meta">-</span>
-              <button id="setReportRate" type="button">適用</button>
+              <span class="setting-meta">100-1000ミリ秒 / 100 step</span>
+              <button id="applyCapturedBhop" type="button">適用</button>
             </div>
           </section>
 
