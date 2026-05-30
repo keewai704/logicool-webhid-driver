@@ -586,6 +586,38 @@ class LogitechHidpp20Driver {
     await this.transport.call(index, 3, params);
   }
 
+  async getExtendedDpi(sensorIndex = 0) {
+    const index = await this.featureIndex(FEATURE.ADJUSTABLE_DPI_ADVANCED);
+    const response = await this.transport.call(index, 5, [sensorIndex & 0xff], { reportId: REPORT.LONG });
+    const parameters = response.parameters;
+    const currentX = readU16BE(parameters, 1);
+    const defaultX = readU16BE(parameters, 3);
+    const currentY = readU16BE(parameters, 5);
+    const defaultY = readU16BE(parameters, 7);
+    return {
+      sensorIndex: parameters[0] ?? sensorIndex,
+      current: currentX || defaultX,
+      default: defaultX || currentX,
+      x: currentX || defaultX,
+      y: currentY || defaultY || currentX || defaultX,
+      defaultY,
+      lod: parameters[9] ?? 0x02,
+      raw: response,
+    };
+  }
+
+  async setExtendedDpi(sensorIndex, dpi, options = {}) {
+    const index = await this.featureIndex(FEATURE.ADJUSTABLE_DPI_ADVANCED);
+    const params = new Uint8Array(6);
+    const normalizedDpi = Math.round(Number(dpi));
+    const yDpi = Math.round(Number(options.y ?? normalizedDpi));
+    params[0] = sensorIndex & 0xff;
+    writeU16BE(params, 1, normalizedDpi);
+    writeU16BE(params, 3, yDpi);
+    params[5] = options.lod ?? 0x02;
+    await this.transport.call(index, 6, params, { reportId: REPORT.LONG });
+  }
+
   async getReportRateList() {
     const index = await this.featureIndex(FEATURE.ADJUSTABLE_REPORT_RATE);
     const response = await this.transport.call(index, 0, []);

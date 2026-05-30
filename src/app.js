@@ -60,6 +60,7 @@ const state = {
     enabled: false,
     timeout: 100,
   },
+  extendedDpi: null,
   pressureRaw: 0,
 };
 
@@ -448,7 +449,11 @@ async function withOnboardMutation(action, busyText) {
   await withDriver(async (driver) => {
     await ensureOnboardReady(driver);
     await action(driver);
-    await syncOnboardLiveState(driver);
+    try {
+      await syncOnboardLiveState(driver);
+    } catch (error) {
+      log("live state refresh skipped", errorSummary(error));
+    }
   }, busyText);
 }
 
@@ -595,6 +600,63 @@ async function writeCapturedAdvancedDpi(driver, sensorIndex, dpi) {
     acknowledged: false,
   });
   return attempts;
+}
+
+async function writeSelectedSensorDpi(driver, sensorIndex, dpi) {
+  const result = {};
+  if (hasFeature(FEATURE.ADJUSTABLE_DPI)) {
+    try {
+      await driver.setSensorDpi(sensorIndex, dpi);
+      result.standard = "ok";
+    } catch (error) {
+      result.standard = { error: errorSummary(error) };
+    }
+  }
+
+  if (hasFeature(FEATURE.ADJUSTABLE_DPI_ADVANCED)) {
+    const sensor = selectedSensor();
+    try {
+      await driver.setExtendedDpi(sensorIndex, dpi, {
+        y: dpi,
+        lod: sensor?.lod ?? state.extendedDpi?.lod ?? 0x02,
+      });
+      result.extendedAdvanced = "ok";
+      try {
+        state.extendedDpi = await driver.getExtendedDpi(sensorIndex);
+      } catch (error) {
+        state.extendedDpi = {
+          sensorIndex,
+          current: dpi,
+          default: sensor?.default || 1600,
+          y: dpi,
+          lod: sensor?.lod ?? state.extendedDpi?.lod ?? 0x02,
+          refreshError: errorSummary(error),
+        };
+        result.extendedRefresh = { error: errorSummary(error) };
+      }
+    } catch (error) {
+      result.extendedAdvanced = { error: errorSummary(error) };
+      try {
+        result.capturedAdvanced = await writeCapturedAdvancedDpi(driver, sensorIndex, dpi);
+      } catch (fallbackError) {
+        result.capturedAdvanced = { error: errorSummary(fallbackError) };
+      }
+    }
+  } else if (!hasFeature(FEATURE.ADJUSTABLE_DPI)) {
+    result.capturedAdvanced = await writeCapturedAdvancedDpi(driver, sensorIndex, dpi);
+  }
+
+  if (hasFeature(FEATURE.ADJUSTABLE_DPI)) {
+    try {
+      state.dpiSensors = await driver.getDpiSensors();
+    } catch (error) {
+      result.standardRefresh = { error: errorSummary(error) };
+    }
+  } else if (hasFeature(FEATURE.ADJUSTABLE_DPI_ADVANCED)) {
+    renderCapturedDpiControls(state.extendedDpi);
+  }
+
+  return result;
 }
 
 async function writeCapturedReportRate(driver, channel, ms) {
@@ -777,20 +839,39 @@ function renderDpiControls() {
   $("#dpiSensorMeta").textContent = `${min}-${max} DPI / ${step} step`;
 }
 
-function renderCapturedDpiControls() {
-  const current = selectedSensorDpi() || 1600;
+function renderCapturedDpiControls(advanced = null) {
+  const current = advanced?.current || selectedSensorDpi() || 1600;
   state.dpiSensors = [
     {
-      index: 0,
+      index: advanced?.sensorIndex ?? 0,
       list: [400, 800, 1600, 3200],
       step: G_HUB_ADVANCED_DPI_RANGE.step,
       current,
-      default: 1600,
+      default: advanced?.default || 1600,
+      lod: advanced?.lod ?? 0x02,
+      y: advanced?.y || current,
       capturedAdvanced: true,
     },
   ];
   renderDpiControls();
   $("#dpiSensorMeta").textContent = `${G_HUB_ADVANCED_DPI_RANGE.min}-${G_HUB_ADVANCED_DPI_RANGE.max} DPI / ${G_HUB_ADVANCED_DPI_RANGE.step} step`;
+}
+
+async function refreshAdvancedDpiControls(driver) {
+  try {
+    state.extendedDpi = await driver.getExtendedDpi(0);
+    renderCapturedDpiControls(state.extendedDpi);
+    log("advanced DPI loaded", {
+      current: state.extendedDpi.current,
+      default: state.extendedDpi.default,
+      y: state.extendedDpi.y,
+      lod: state.extendedDpi.lod,
+    });
+  } catch (error) {
+    state.extendedDpi = { error: errorSummary(error) };
+    renderCapturedDpiControls();
+    log("advanced DPI read skipped", errorSummary(error));
+  }
 }
 
 function reportRatesForChannel(channel) {
@@ -883,7 +964,7 @@ async function refreshConfigurableControls(driver) {
     state.dpiSensors = await driver.getDpiSensors();
     renderDpiControls();
   } else if (hasFeature(FEATURE.ADJUSTABLE_DPI_ADVANCED)) {
-    renderCapturedDpiControls();
+    await refreshAdvancedDpiControls(driver);
   }
   if (hasFeature(FEATURE.ADJUSTABLE_REPORT_RATE)) {
     const [list, current] = await Promise.all([driver.getReportRateList(), driver.getReportRate()]);
@@ -1005,19 +1086,7 @@ async function setSensorDpi() {
     const sensorIndex = Number($("#dpiSensorIndex").value || 0);
     const dpi = selectedSensorDpi();
     syncDpiInputs(dpi);
-    const result = {};
-    if (hasFeature(FEATURE.ADJUSTABLE_DPI)) {
-      try {
-        await driver.setSensorDpi(sensorIndex, dpi);
-        result.standard = "ok";
-      } catch (error) {
-        result.standard = { error: errorSummary(error) };
-      }
-    }
-    result.capturedAdvanced = await writeCapturedAdvancedDpi(driver, sensorIndex, dpi);
-    if (hasFeature(FEATURE.ADJUSTABLE_DPI)) {
-      state.dpiSensors = await driver.getDpiSensors();
-    }
+    const result = await writeSelectedSensorDpi(driver, sensorIndex, dpi);
     renderDpiControls();
     syncDpiInputs(dpi);
     log("sensor DPI set", { sensorIndex, dpi, ...result });
@@ -1092,13 +1161,7 @@ async function applyOnboardProfile() {
         dpi: selectedSensorDpi(),
       };
       syncDpiInputs(applied.dpi.dpi);
-      try {
-        await driver.setSensorDpi(applied.dpi.sensorIndex, applied.dpi.dpi);
-        applied.dpi.standard = "ok";
-      } catch (error) {
-        applied.dpi.standard = { error: errorSummary(error) };
-      }
-      applied.dpi.capturedAdvanced = await writeCapturedAdvancedDpi(driver, applied.dpi.sensorIndex, applied.dpi.dpi);
+      Object.assign(applied.dpi, await writeSelectedSensorDpi(driver, applied.dpi.sensorIndex, applied.dpi.dpi));
     }
 
     applied.reportRate = {
