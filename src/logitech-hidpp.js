@@ -501,9 +501,11 @@ class LogitechHidpp20Driver {
   async getCurrentProfile() {
     const index = await this.featureIndex(FEATURE.ONBOARD_PROFILES);
     const response = await this.transport.call(index, 4, []);
+    const sector = readU16BE(response.parameters, 0);
     return {
       memoryType: response.parameters[0],
       profileIndex: response.parameters[1],
+      sector,
       raw: response,
     };
   }

@@ -47,6 +47,7 @@ const state = {
   unsubscribe: null,
   features: [],
   onboardDescription: null,
+  onboardProfiles: [],
   dpiSensors: [],
   reportRates: {
     wired: [...FALLBACK_REPORT_RATES],
@@ -347,13 +348,19 @@ function renderOnboardState({ mode, profile, dpi, description }) {
   const isOnboard = mode?.mode === ONBOARD_MODE.ONBOARD;
   badge.textContent = isOnboard ? "ON" : mode?.label?.toUpperCase() || "UNKNOWN";
   badge.dataset.state = isOnboard ? "ok" : "warn";
-  $("#profileStatus").textContent = `SLOT ${(profile?.profileIndex ?? selectedProfileIndex()) + 1}`;
+  $("#profileStatus").textContent = `SLOT ${activeProfileIndexFromSector(profile?.sector) + 1}`;
   $("#dpiSlotStatus").textContent = `DPI ${(dpi?.dpiIndex ?? selectedDpiSlot()) + 1}`;
   $("#onboardMeta").textContent = `${description?.profileCount ?? 1} profile(s) / ${description?.sectorCount ?? "-"} sectors`;
 }
 
+function activeProfileIndexFromSector(sector) {
+  const index = state.onboardProfiles.findIndex((profile) => profile.sector === sector);
+  if (index !== -1) return index;
+  return selectedProfileIndex();
+}
+
 function selectedProfileIndex() {
-  const count = Math.max(1, state.onboardDescription?.profileCount ?? 1);
+  const count = Math.max(1, state.onboardProfiles.length || state.onboardDescription?.profileCount || 1);
   const value = Number.parseInt($("#profileSlot").value || String(DEFAULT_PROFILE_INDEX), 10);
   return clamp(Number.isFinite(value) ? value : DEFAULT_PROFILE_INDEX, 0, count - 1);
 }
@@ -365,13 +372,21 @@ function selectedDpiSlot() {
 
 function updateProfileOptions(description, selected = DEFAULT_PROFILE_INDEX) {
   const select = $("#profileSlot");
-  const count = Math.max(1, description?.profileCount ?? 1);
+  const profiles = state.onboardProfiles.length
+    ? state.onboardProfiles
+    : Array.from({ length: Math.max(1, description?.profileCount ?? 1) }, (_, index) => ({
+        profileIndex: index,
+        sector: index,
+        enabled: true,
+      }));
+  const count = profiles.length;
   const nextValue = clamp(selected, 0, count - 1);
   select.replaceChildren(
-    ...Array.from({ length: count }, (_, index) => {
+    ...profiles.map((profile, index) => {
       const option = document.createElement("option");
       option.value = String(index);
       option.textContent = `SLOT ${index + 1}`;
+      option.disabled = !profile.enabled;
       return option;
     }),
   );
@@ -399,7 +414,7 @@ async function syncOnboardLiveState(driver) {
     driver.getCurrentProfile(),
     driver.getCurrentDpiIndex(),
   ]);
-  updateProfileOptions(state.onboardDescription, profile.profileIndex ?? DEFAULT_PROFILE_INDEX);
+  updateProfileOptions(state.onboardDescription, activeProfileIndexFromSector(profile.sector));
   updateDpiSlotOptions(dpi.dpiIndex ?? DEFAULT_DPI_SLOT);
   renderOnboardState({ mode, profile, dpi, description: state.onboardDescription });
 }
@@ -409,15 +424,17 @@ async function ensureOnboardReady(driver) {
     throw new Error("オンボードメモリ機能が見つかりません");
   }
   const profileIndex = selectedProfileIndex();
+  const profileSector = state.onboardProfiles[profileIndex]?.sector ?? profileIndex;
   await driver.setOnboardMode(ONBOARD_MODE.ONBOARD);
   try {
-    await driver.setCurrentProfile(ONBOARD_MEMORY_TYPE.WRITEABLE, profileIndex);
+    await driver.setCurrentProfile((profileSector >> 8) & 0xff, profileSector & 0xff);
   } catch (error) {
     if (error.code !== HIDPP_INVALID_ARGUMENT) throw error;
     log("profile slot selection skipped", {
       reason: "device rejected writable profile selection",
       featureIndex: error.frame?.error?.featureIndex,
       profileIndex,
+      profileSector,
     });
   }
   $("#onboardBadge").textContent = "ON";
@@ -1015,6 +1032,16 @@ async function refreshAll(driver) {
     log("on-board profiles feature 0x8100 is not exposed by this interface");
   } else {
     state.onboardDescription = await driver.getOnboardDescription();
+    try {
+      const profileHeaders = await driver.getOnboardProfileHeaders(state.onboardDescription);
+      state.onboardProfiles = profileHeaders.headers;
+      log("on-board profile sectors loaded", {
+        profiles: state.onboardProfiles.map(({ profileIndex, sector, enabled }) => ({ profileIndex, sector, enabled })),
+      });
+    } catch (error) {
+      state.onboardProfiles = [];
+      log("on-board profile sectors skipped", errorSummary(error));
+    }
     updateProfileOptions(state.onboardDescription, DEFAULT_PROFILE_INDEX);
     updateDpiSlotOptions(DEFAULT_DPI_SLOT);
     await ensureOnboardReady(driver);
