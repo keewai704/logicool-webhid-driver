@@ -254,6 +254,10 @@ function hasFeature(featureId) {
   return state.features.some((feature) => feature.id === featureId);
 }
 
+function hasDpiFeature() {
+  return hasFeature(FEATURE.ADJUSTABLE_DPI) || hasFeature(FEATURE.ADJUSTABLE_DPI_ADVANCED);
+}
+
 function connectionDeviceIndexes(device) {
   const defaultIndex = LogitechHidpp20Driver.defaultDeviceIndex(device);
   const receiverIndexes = [defaultIndex, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, DEFAULT_WIRED_DEVICE_INDEX];
@@ -262,7 +266,12 @@ function connectionDeviceIndexes(device) {
 }
 
 function hasTargetMouseFeatures(features) {
-  return features.some((feature) => feature.id === FEATURE.ONBOARD_PROFILES || feature.id === FEATURE.ADJUSTABLE_DPI);
+  return features.some(
+    (feature) =>
+      feature.id === FEATURE.ONBOARD_PROFILES ||
+      feature.id === FEATURE.ADJUSTABLE_DPI ||
+      feature.id === FEATURE.ADJUSTABLE_DPI_ADVANCED,
+  );
 }
 
 async function openResponsiveDriver(device) {
@@ -305,7 +314,7 @@ async function openResponsiveDriver(device) {
 function renderCapabilities() {
   const capabilities = [
     { label: "ON-BOARD", supported: hasFeature(FEATURE.ONBOARD_PROFILES) },
-    { label: "DPI", supported: hasFeature(FEATURE.ADJUSTABLE_DPI) },
+    { label: "DPI", supported: hasDpiFeature() },
     { label: "REPORT RATE", supported: hasFeature(FEATURE.ADJUSTABLE_REPORT_RATE) },
     { label: "WIRELESS", supported: true },
     { label: "WIRED", supported: true },
@@ -768,6 +777,22 @@ function renderDpiControls() {
   $("#dpiSensorMeta").textContent = `${min}-${max} DPI / ${step} step`;
 }
 
+function renderCapturedDpiControls() {
+  const current = selectedSensorDpi() || 1600;
+  state.dpiSensors = [
+    {
+      index: 0,
+      list: [400, 800, 1600, 3200],
+      step: G_HUB_ADVANCED_DPI_RANGE.step,
+      current,
+      default: 1600,
+      capturedAdvanced: true,
+    },
+  ];
+  renderDpiControls();
+  $("#dpiSensorMeta").textContent = `${G_HUB_ADVANCED_DPI_RANGE.min}-${G_HUB_ADVANCED_DPI_RANGE.max} DPI / ${G_HUB_ADVANCED_DPI_RANGE.step} step`;
+}
+
 function reportRatesForChannel(channel) {
   const rates = state.reportRates[channel] ?? [];
   return rates.length ? rates : [...FALLBACK_REPORT_RATES];
@@ -857,6 +882,8 @@ async function refreshConfigurableControls(driver) {
   if (hasFeature(FEATURE.ADJUSTABLE_DPI)) {
     state.dpiSensors = await driver.getDpiSensors();
     renderDpiControls();
+  } else if (hasFeature(FEATURE.ADJUSTABLE_DPI_ADVANCED)) {
+    renderCapturedDpiControls();
   }
   if (hasFeature(FEATURE.ADJUSTABLE_REPORT_RATE)) {
     const [list, current] = await Promise.all([driver.getReportRateList(), driver.getReportRate()]);
@@ -903,7 +930,7 @@ async function refreshAll(driver) {
     });
   }
 
-  const dpiSupported = hasFeature(FEATURE.ADJUSTABLE_DPI);
+  const dpiSupported = hasDpiFeature();
   $("#dpiPanel").hidden = !dpiSupported;
   $("#reportRatePanel").hidden = false;
   $("#bhopPanel").hidden = false;
@@ -1059,7 +1086,7 @@ async function applyOnboardProfile() {
 
     await driver.setCurrentDpiIndex(applied.dpiSlot);
 
-    if (hasFeature(FEATURE.ADJUSTABLE_DPI) && state.dpiSensors.length) {
+    if (hasDpiFeature() && state.dpiSensors.length) {
       applied.dpi = {
         sensorIndex: Number($("#dpiSensorIndex").value || 0),
         dpi: selectedSensorDpi(),

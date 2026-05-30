@@ -25,6 +25,7 @@ const FEATURE = Object.freeze({
   DEVICE_INFO: 0x0003,
   BATTERY_LEVEL_STATUS: 0x1000,
   ADJUSTABLE_DPI: 0x2201,
+  ADJUSTABLE_DPI_ADVANCED: 0x2202,
   ADJUSTABLE_REPORT_RATE: 0x8060,
   ONBOARD_PROFILES: 0x8100,
 });
@@ -35,6 +36,7 @@ const FEATURE_NAMES = new Map([
   [0x0003, "Device/Firmware info"],
   [0x1000, "Battery level status"],
   [0x2201, "Adjustable DPI"],
+  [0x2202, "Adjustable DPI advanced"],
   [0x8060, "Adjustable report rate"],
   [0x8071, "RGB effects"],
   [0x8100, "On-board profiles"],
