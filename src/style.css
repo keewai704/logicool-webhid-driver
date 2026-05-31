@@ -532,7 +532,7 @@ input[type="number"] {
 
 .hits-mouse-map {
   display: grid;
-  grid-template-columns: minmax(76px, 92px) minmax(190px, 224px) minmax(76px, 92px);
+  grid-template-columns: minmax(76px, 92px) minmax(190px, 238px) minmax(76px, 92px);
   column-gap: 8px;
   place-items: center;
   min-height: 330px;
@@ -588,7 +588,7 @@ input[type="number"] {
 .hits-mouse-body {
   position: relative;
   width: min(100%, 236px);
-  aspect-ratio: 151 / 249;
+  aspect-ratio: 141 / 280;
   margin: 0 auto;
   filter: drop-shadow(0 26px 46px rgba(0, 0, 0, 0.56));
 }
@@ -605,10 +605,10 @@ input[type="number"] {
 .hits-button {
   position: absolute;
   overflow: hidden;
-  top: 10%;
+  top: 0.1%;
   z-index: 2;
-  width: 42%;
-  height: 40.5%;
+  width: 42.3%;
+  height: 44.8%;
   border: 2px solid rgba(0, 166, 255, 0.95);
   background:
     repeating-linear-gradient(180deg, transparent 0 calc(10% - 1px), rgba(0, 166, 255, 0.44) calc(10% - 1px) 10%),
@@ -629,13 +629,13 @@ input[type="number"] {
 }
 
 .hits-button.left {
-  left: 8%;
-  border-radius: 96px 4px 12px 18px;
+  left: 6.9%;
+  border-radius: 96px 4px 14px 18px;
 }
 
 .hits-button.right {
-  right: 7%;
-  border-radius: 4px 96px 18px 12px;
+  right: 6.8%;
+  border-radius: 4px 96px 18px 14px;
 }
 
 .hits-ap-line {
