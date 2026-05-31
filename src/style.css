@@ -5,15 +5,15 @@
     sans-serif;
   background: #0b0d10;
   color: #f5f7f8;
-  --bg: #0b0d10;
-  --surface: #11151a;
-  --surface-2: #171c22;
-  --line: #2a3138;
-  --muted: #9aa7b0;
+  --bg: #000;
+  --surface: #15171b;
+  --surface-2: #212225;
+  --line: rgba(255, 255, 255, 0.12);
+  --muted: rgba(255, 255, 255, 0.6);
   --text: #f5f7f8;
-  --accent: #00a6ff;
-  --accent-2: #69f0ae;
-  --danger: #ff6961;
+  --accent: #1196ff;
+  --accent-2: #00c593;
+  --danger: #ff4464;
 }
 
 * {
@@ -24,7 +24,9 @@ body {
   margin: 0;
   min-width: 320px;
   min-height: 100vh;
-  background: linear-gradient(180deg, #11161b 0, var(--bg) 22rem);
+  background:
+    linear-gradient(180deg, rgba(33, 34, 37, 0.92) 0, rgba(0, 0, 0, 0.94) 19rem),
+    var(--bg);
 }
 
 button,
@@ -123,6 +125,11 @@ label {
   color: var(--accent);
   font-size: 24px;
   font-weight: 900;
+}
+
+.brand-mark img {
+  width: 26px;
+  height: 26px;
 }
 
 .brand p {
@@ -293,6 +300,42 @@ label {
   margin-bottom: 18px;
 }
 
+.panel-title {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+.panel-icon {
+  flex: 0 0 auto;
+  width: 30px;
+  height: 30px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  background-color: #0d0f12;
+  background-position: center;
+  background-repeat: no-repeat;
+  background-size: 20px;
+  box-shadow: inset 0 0 0 1px rgba(17, 150, 255, 0.08);
+}
+
+.icon-dpi {
+  background-image: url("./assets/dpi.png");
+}
+
+.icon-performance {
+  background-image: url("./assets/performance.png");
+}
+
+.icon-scroll-wheel {
+  background-image: url("./assets/scroll-wheel.png");
+}
+
+.icon-rapid-switches {
+  background-image: url("./assets/rapid-switches.png");
+}
+
 .eyebrow {
   display: block;
   margin-bottom: 4px;
@@ -443,6 +486,22 @@ input[type="number"] {
   line-height: 1.65;
 }
 
+.bhop-panel {
+  min-height: 0;
+}
+
+.bhop-panel .panel-description {
+  max-width: 900px;
+}
+
+.bhop-panel .controls {
+  max-width: 420px;
+}
+
+.bhop-panel .slider-field {
+  max-width: 100%;
+}
+
 .range-caption {
   display: flex;
   justify-content: space-between;
@@ -469,14 +528,6 @@ input[type="number"] {
   margin: 0;
   font-size: 18px;
   letter-spacing: 0;
-}
-
-.hits-stage-heading span,
-.pressure-panel strong {
-  color: var(--accent);
-  font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
-  font-size: 13px;
-  font-weight: 900;
 }
 
 .hits-mouse-map {
@@ -615,15 +666,6 @@ input[type="number"] {
   transform: translateX(-50%);
 }
 
-.hits-pressure-fill {
-  position: absolute;
-  inset: 0 0 auto;
-  z-index: 1;
-  height: 0%;
-  background: linear-gradient(180deg, rgba(0, 166, 255, 0.88), rgba(0, 166, 255, 0.5));
-  transition: height 70ms linear;
-}
-
 .hits-ap-line {
   position: absolute;
   inset-inline: 0;
@@ -639,17 +681,12 @@ input[type="number"] {
   top: 48%;
   left: 50%;
   z-index: 5;
-  display: grid;
-  place-items: center;
   width: 22px;
   height: 22px;
   border-radius: 50%;
-  background: var(--accent);
-  color: white;
-  font-size: 14px;
-  font-weight: 900;
+  background: url("./assets/paired.png") center / contain no-repeat;
   transform: translate(-50%, -50%);
-  box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.7);
+  box-shadow: 0 0 18px rgba(17, 150, 255, 0.5);
 }
 
 .hits-model-text {
@@ -697,43 +734,6 @@ input[type="number"] {
   font-size: 54px;
   font-weight: 900;
   transform: translateX(-50%);
-}
-
-.pressure-panel {
-  display: grid;
-  gap: 10px;
-  border-top: 1px solid var(--line);
-  padding-top: 14px;
-}
-
-.pressure-panel div:first-child {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.pressure-panel span,
-.pressure-panel small {
-  color: var(--muted);
-  font-size: 12px;
-  font-weight: 800;
-}
-
-.pressure-track {
-  overflow: hidden;
-  height: 12px;
-  border-radius: 999px;
-  background: #0a0d10;
-}
-
-.pressure-track span {
-  display: block;
-  width: 0%;
-  height: 100%;
-  border-radius: inherit;
-  background: linear-gradient(90deg, var(--accent), var(--accent-2));
-  transition: width 80ms linear;
 }
 
 .toggle-field {

@@ -10,7 +10,7 @@
     <main class="app-shell">
       <header class="topbar">
         <div class="brand">
-          <span class="brand-mark" aria-hidden="true">G</span>
+          <span class="brand-mark" aria-hidden="true"><img src="./src/assets/g-logo.png" alt="" /></span>
           <div>
             <p>Logicool</p>
             <h1>ON-BOARD MEMORY MODE</h1>
@@ -46,9 +46,12 @@
         <section class="settings-grid">
           <section id="dpiPanel" class="panel span-6" hidden>
             <div class="panel-heading">
-              <div>
-                <span class="eyebrow">SENSITIVITY</span>
-                <h2>DPI</h2>
+              <div class="panel-title">
+                <span class="panel-icon icon-dpi" aria-hidden="true"></span>
+                <div>
+                  <span class="eyebrow">SENSITIVITY</span>
+                  <h2>DPI</h2>
+                </div>
               </div>
             </div>
             <div class="controls">
@@ -72,9 +75,12 @@
 
           <section id="reportRatePanel" class="panel span-6" hidden>
             <div class="panel-heading">
-              <div>
-                <span class="eyebrow">POLLING</span>
-                <h2>レポートレート</h2>
+              <div class="panel-title">
+                <span class="panel-icon icon-performance" aria-hidden="true"></span>
+                <div>
+                  <span class="eyebrow">POLLING</span>
+                  <h2>レポートレート</h2>
+                </div>
               </div>
             </div>
             <div class="rate-stack">
@@ -113,11 +119,14 @@
             </div>
           </section>
 
-          <section id="bhopPanel" class="panel span-6 bhop-panel">
+          <section id="bhopPanel" class="panel span-12 bhop-panel">
             <div class="panel-heading">
-              <div>
-                <span class="eyebrow">BHOP</span>
-                <h2>スクロールホイール</h2>
+              <div class="panel-title">
+                <span class="panel-icon icon-scroll-wheel" aria-hidden="true"></span>
+                <div>
+                  <span class="eyebrow">BHOP</span>
+                  <h2>スクロールホイール</h2>
+                </div>
               </div>
             </div>
             <p class="panel-description">BHOPモードは、スクロールホイールを誤ってぶつけてしまった場合に、意図しないジャンプを防ぐのに役立ちます。有効にすると、スライダーで定義された時間枠内に2回目のスクロールイベントが発生しない限り、マウスは最初のスクロールイベントを無視します。</p>
@@ -143,9 +152,12 @@
 
           <section class="panel span-12 hits-panel">
             <div class="panel-heading">
-              <div>
-                <span class="eyebrow">SUPERSTRIKE HITS</span>
-                <h2>HITS 構成</h2>
+              <div class="panel-title">
+                <span class="panel-icon icon-rapid-switches" aria-hidden="true"></span>
+                <div>
+                  <span class="eyebrow">SUPERSTRIKE HITS</span>
+                  <h2>HITS 構成</h2>
+                </div>
               </div>
             </div>
             <div class="hits-layout">
@@ -167,7 +179,6 @@
               <div class="hits-stage">
                 <div class="hits-stage-heading">
                   <h3>HITS</h3>
-                  <span id="pressureRaw">RAW 0</span>
                 </div>
                 <div class="hits-mouse-map" aria-label="HITS current settings">
                   <div class="hits-side-summary left" aria-hidden="true">
@@ -177,14 +188,12 @@
                   </div>
                   <div class="hits-mouse-body" aria-hidden="true">
                     <span class="hits-button left">
-                      <span id="leftPressureFill" class="hits-pressure-fill"></span>
                       <span id="leftApLine" class="hits-ap-line"></span>
-                      <span class="hits-button-check">✓</span>
+                      <span class="hits-button-check"></span>
                     </span>
                     <span class="hits-button right">
-                      <span id="rightPressureFill" class="hits-pressure-fill"></span>
                       <span id="rightApLine" class="hits-ap-line"></span>
-                      <span class="hits-button-check">✓</span>
+                      <span class="hits-button-check"></span>
                     </span>
                     <span class="hits-center-spine"></span>
                     <span class="hits-wheel"></span>
@@ -199,13 +208,6 @@
                     <span><b id="rightMouseRapid">1</b> RT</span>
                     <span><b id="rightMouseHaptics">1</b> HF</span>
                   </div>
-                </div>
-                <div class="pressure-panel">
-                  <div>
-                    <span>現在の押し込み具合</span>
-                    <strong id="pressureValue">0%</strong>
-                  </div>
-                  <small id="pressureHint">HITS深度レポート待機中</small>
                 </div>
               </div>
               <div class="hit-side-controls">
