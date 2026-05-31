@@ -42,6 +42,7 @@ const HITS_FEATURE_INDEX = 0x0c;
 const HITS_WRITE_FUNCTION = 0x01;
 const HITS_PRESSURE_FUNCTION = 0x00;
 const HITS_SOFTWARE_ID = 0x0d;
+const HITS_CAPTURED_INPUT_FEATURE_INDEX = 0x0f;
 const HITS_PRESSURE_MAX = 5;
 const HIDPP_INVALID_ARGUMENT = 0x02;
 
@@ -208,10 +209,11 @@ function renderHitsModel() {
   }
 }
 
-function renderHitsPressure(rawValue, side = null) {
-  const raw = clamp(Number(rawValue) || 0, 0, HITS_PRESSURE_MAX);
+function renderHitsPressure(rawValue, side = null, maxValue = HITS_PRESSURE_MAX) {
+  const max = Math.max(1, Number(maxValue) || HITS_PRESSURE_MAX);
+  const raw = clamp(Number(rawValue) || 0, 0, max);
   state.pressureRaw = raw;
-  const percent = Math.round((raw / HITS_PRESSURE_MAX) * 100);
+  const percent = Math.round((raw / max) * 100);
   const sides = side ? [side] : ["left", "right"];
   $("#pressureRaw").textContent = `${side ? side.toUpperCase() : "RAW"} ${raw}`;
   $("#pressureValue").textContent = `${percent}%`;
@@ -222,27 +224,34 @@ function renderHitsPressure(rawValue, side = null) {
 }
 
 function parseHitsPressureFrame(frame) {
+  if (frame.featureIndex === HITS_CAPTURED_INPUT_FEATURE_INDEX) {
+    const buttonState = frame.parameters[1] ?? frame.parameters[0] ?? 0;
+    if (buttonState === 0x01) return { side: "left", raw: 1, max: 1, source: "captured-input", buttonState };
+    if (buttonState === 0x02) return { side: "right", raw: 1, max: 1, source: "captured-input", buttonState };
+    return { side: null, raw: 0, max: 1, source: "captured-input", buttonState };
+  }
+
   const values = Array.from(frame.parameters.slice(0, 4));
   if (values[0] <= 1 && values[1] > 1 && values[1] <= HITS_PRESSURE_MAX) {
-    return { side: hitsSideFromIndex(values[0]), raw: values[1] };
+    return { side: hitsSideFromIndex(values[0]), raw: values[1], max: HITS_PRESSURE_MAX, source: "legacy-pressure" };
   }
   if (values[1] <= 1 && values[0] > 1 && values[0] <= HITS_PRESSURE_MAX) {
-    return { side: hitsSideFromIndex(values[1]), raw: values[0] };
+    return { side: hitsSideFromIndex(values[1]), raw: values[0], max: HITS_PRESSURE_MAX, source: "legacy-pressure" };
   }
-  return { side: null, raw: values[0] };
+  return { side: null, raw: values[0], max: HITS_PRESSURE_MAX, source: "legacy-pressure" };
 }
 
 function handleHitsPressureFrame(frame) {
   if (
     ![REPORT.SHORT, REPORT.LONG].includes(frame.reportId) ||
     !candidateDeviceIndexes().includes(frame.deviceIndex) ||
-    frame.featureIndex !== HITS_FEATURE_INDEX ||
+    ![HITS_FEATURE_INDEX, HITS_CAPTURED_INPUT_FEATURE_INDEX].includes(frame.featureIndex) ||
     frame.functionId !== HITS_PRESSURE_FUNCTION
   ) {
     return false;
   }
   const pressure = parseHitsPressureFrame(frame);
-  renderHitsPressure(pressure.raw, pressure.side);
+  renderHitsPressure(pressure.raw, pressure.side, pressure.max);
   log("HITS pressure frame", {
     parsed: pressure,
     reportId: frame.reportId,
