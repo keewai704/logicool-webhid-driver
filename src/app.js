@@ -201,7 +201,6 @@ function renderHitsModel() {
     setOutput(`#${side}MouseActuation`, actuation);
     setOutput(`#${side}MouseRapid`, rapid);
     setOutput(`#${side}MouseHaptics`, haptics);
-    $(`#${side}ApLine`).style.setProperty("--ap-position", `${clamp(actuation, 1, 10) * 10}%`);
   }
 }
 

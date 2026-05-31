@@ -554,20 +554,7 @@ input[type="number"] {
 }
 
 .hits-side-summary::after {
-  content: "";
-  position: absolute;
-  top: 50%;
-  width: 78px;
-  height: 1px;
-  background: #2b3238;
-}
-
-.hits-side-summary.left::after {
-  left: 100%;
-}
-
-.hits-side-summary.right::after {
-  right: 100%;
+  display: none;
 }
 
 .hits-side-summary span {
@@ -628,30 +615,6 @@ input[type="number"] {
 .hits-button.right {
   right: 6.8%;
   border-radius: 4px 96px 18px 14px;
-}
-
-.hits-ap-line {
-  position: absolute;
-  inset-inline: 0;
-  top: var(--ap-position, 30%);
-  z-index: 5;
-  height: 4px;
-  background: #ffffff;
-  box-shadow: 0 0 12px rgba(0, 166, 255, 0.9);
-  transform: translateY(-50%);
-}
-
-.hits-button-check {
-  position: absolute;
-  top: 48%;
-  left: 50%;
-  z-index: 6;
-  width: 22px;
-  height: 22px;
-  border-radius: 50%;
-  background: url("./assets/paired.png") center / contain no-repeat;
-  transform: translate(-50%, -50%);
-  box-shadow: 0 0 18px rgba(17, 150, 255, 0.5);
 }
 
 .toggle-field {
@@ -748,7 +711,4 @@ input[type="number"] {
     transform: none;
   }
 
-  .hits-side-summary::after {
-    display: none;
-  }
 }
