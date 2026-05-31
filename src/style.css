@@ -587,33 +587,36 @@ input[type="number"] {
 
 .hits-mouse-body {
   position: relative;
-  width: min(100%, 224px);
-  aspect-ratio: 0.58;
+  width: min(100%, 236px);
+  aspect-ratio: 151 / 249;
   margin: 0 auto;
-  border: 1px solid rgba(255, 255, 255, 0.62);
-  border-radius: 112px 112px 86px 86px;
-  background:
-    radial-gradient(circle at 50% 68%, rgba(255, 255, 255, 0.98), rgba(222, 228, 231, 0.98) 47%, rgba(192, 202, 207, 0.98) 71%, rgba(230, 235, 238, 0.96) 100%),
-    #eef2f4;
-  box-shadow:
-    inset 0 22px 34px rgba(255, 255, 255, 0.64),
-    inset 0 -18px 24px rgba(151, 163, 170, 0.38),
-    0 24px 64px rgba(0, 0, 0, 0.58);
+  filter: drop-shadow(0 26px 46px rgba(0, 0, 0, 0.56));
+}
+
+.hits-body-image {
+  position: relative;
+  z-index: 1;
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
 }
 
 .hits-button {
   position: absolute;
   overflow: hidden;
-  top: 8%;
-  width: 47%;
-  height: 31%;
-  border: 3px solid rgba(0, 166, 255, 0.92);
+  top: 10%;
+  z-index: 2;
+  width: 42%;
+  height: 40.5%;
+  border: 2px solid rgba(0, 166, 255, 0.95);
   background:
-    linear-gradient(180deg, rgba(0, 166, 255, 0.22), rgba(0, 166, 255, 0.07)),
-    rgba(12, 18, 22, 0.22);
+    repeating-linear-gradient(180deg, transparent 0 calc(10% - 1px), rgba(0, 166, 255, 0.44) calc(10% - 1px) 10%),
+    linear-gradient(180deg, rgba(0, 166, 255, 0.22), rgba(0, 166, 255, 0.08));
   box-shadow:
     inset 0 0 22px rgba(0, 166, 255, 0.2),
     0 0 22px rgba(0, 166, 255, 0.22);
+  pointer-events: none;
 }
 
 .hits-button::after {
@@ -621,119 +624,42 @@ input[type="number"] {
   position: absolute;
   inset: 0;
   z-index: 3;
-  background-image: radial-gradient(circle, rgba(8, 12, 16, 0.72) 1.2px, transparent 1.8px);
-  background-position: left calc(10% - 1px);
-  background-repeat: repeat;
-  background-size: 8px 10%;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.18), transparent 34%, rgba(255, 255, 255, 0.08));
   pointer-events: none;
 }
 
 .hits-button.left {
-  left: 3%;
-  border-radius: 88px 8px 12px 18px;
+  left: 8%;
+  border-radius: 96px 4px 12px 18px;
 }
 
 .hits-button.right {
-  right: 3%;
-  border-radius: 8px 88px 18px 12px;
-}
-
-.hits-wheel {
-  position: absolute;
-  top: 13%;
-  left: 50%;
-  z-index: 5;
-  width: 26px;
-  height: 76px;
-  border: 4px solid #071017;
-  border-radius: 16px;
-  background:
-    repeating-linear-gradient(180deg, #5e6a70 0 3px, #293238 3px 6px),
-    #1e2830;
-  transform: translateX(-50%);
-  box-shadow: 0 8px 18px rgba(0, 0, 0, 0.44);
-}
-
-.hits-center-spine {
-  position: absolute;
-  top: 0;
-  left: 50%;
-  z-index: 4;
-  width: 4px;
-  height: 44%;
-  border-radius: 999px;
-  background: rgba(7, 16, 23, 0.52);
-  transform: translateX(-50%);
+  right: 7%;
+  border-radius: 4px 96px 18px 12px;
 }
 
 .hits-ap-line {
   position: absolute;
   inset-inline: 0;
   top: var(--ap-position, 30%);
-  z-index: 4;
+  z-index: 5;
   height: 4px;
   background: #ffffff;
   box-shadow: 0 0 12px rgba(0, 166, 255, 0.9);
+  transform: translateY(-50%);
 }
 
 .hits-button-check {
   position: absolute;
   top: 48%;
   left: 50%;
-  z-index: 5;
+  z-index: 6;
   width: 22px;
   height: 22px;
   border-radius: 50%;
   background: url("./assets/paired.png") center / contain no-repeat;
   transform: translate(-50%, -50%);
   box-shadow: 0 0 18px rgba(17, 150, 255, 0.5);
-}
-
-.hits-model-text {
-  position: absolute;
-  top: 30%;
-  z-index: 4;
-  color: rgba(255, 255, 255, 0.52);
-  font-size: 14px;
-  font-weight: 900;
-  letter-spacing: 0;
-  writing-mode: vertical-rl;
-}
-
-.hits-model-text.left {
-  left: 42%;
-}
-
-.hits-model-text.right {
-  right: 42%;
-}
-
-.hits-plus {
-  position: absolute;
-  top: 34%;
-  z-index: 5;
-  color: rgba(255, 255, 255, 0.54);
-  font-size: 26px;
-  font-weight: 300;
-  line-height: 1;
-}
-
-.hits-plus.left {
-  left: 21%;
-}
-
-.hits-plus.right {
-  right: 21%;
-}
-
-.hits-logo {
-  position: absolute;
-  left: 50%;
-  bottom: 15%;
-  color: #15191c;
-  font-size: 54px;
-  font-weight: 900;
-  transform: translateX(-50%);
 }
 
 .toggle-field {
