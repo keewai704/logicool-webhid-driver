@@ -16,7 +16,22 @@ const DEFAULT_WIRED_DEVICE_INDEX = 0xff;
 const DEFAULT_PROFILE_INDEX = 0;
 const DEFAULT_DPI_INDEX = 0;
 const DIRECT_WIRED_PRODUCT_ID = 0xc0a8;
-const G_HUB_ADVANCED_DPI_RANGE = Object.freeze({ min: 100, max: 32000, step: 100 });
+const G_HUB_ADVANCED_DPI_RANGE = Object.freeze({
+  min: 100,
+  max: 44000,
+  step: 1,
+  ranges: Object.freeze([
+    Object.freeze({ min: 100, max: 200, step: 1 }),
+    Object.freeze({ min: 200, max: 500, step: 2 }),
+    Object.freeze({ min: 500, max: 1000, step: 5 }),
+    Object.freeze({ min: 1000, max: 2000, step: 10 }),
+    Object.freeze({ min: 2000, max: 5000, step: 20 }),
+    Object.freeze({ min: 5000, max: 10000, step: 50 }),
+    Object.freeze({ min: 10000, max: 20000, step: 100 }),
+    Object.freeze({ min: 20000, max: 32000, step: 125 }),
+    Object.freeze({ min: 32000, max: 44000, step: 200 }),
+  ]),
+});
 const FALLBACK_REPORT_RATES = Object.freeze([
   { ms: 0.125, hz: 8000, capturedValue: 0x06 },
   { ms: 0.25, hz: 4000, capturedValue: 0x05 },
@@ -42,6 +57,22 @@ const HITS_FEATURE_INDEX = 0x0c;
 const HITS_WRITE_FUNCTION = 0x01;
 const HITS_SOFTWARE_ID = 0x0d;
 const HIDPP_INVALID_ARGUMENT = 0x02;
+const HIDPP_TIMEOUT_MS = Object.freeze({
+  probe: 1400,
+  capturedShort: 1200,
+  capturedDpi: 1400,
+  hits: 1400,
+});
+const HITS_RANGES = Object.freeze({
+  actuation: Object.freeze({ min: 1, max: 10, step: 1, default: 5 }),
+  rapid: Object.freeze({ min: 1, max: 5, step: 1, default: 2 }),
+  haptics: Object.freeze({ min: 0, max: 5, step: 1, default: 3 }),
+});
+const HITS_FIELDS = Object.freeze({
+  actuation: "Actuation",
+  rapid: "Rapid",
+  haptics: "Haptics",
+});
 
 const state = {
   driver: null,
@@ -89,6 +120,21 @@ function normalizeToStep(value, { min, max, step }) {
   const safeValue = Number.isFinite(numeric) ? numeric : min;
   const snapped = Math.round((safeValue - min) / step) * step + min;
   return clamp(snapped, min, max);
+}
+
+function normalizeDpiValue(value, range) {
+  const numeric = Number(value);
+  const safeValue = clamp(Number.isFinite(numeric) ? numeric : range.min, range.min, range.max);
+  const segment =
+    range.ranges?.find((candidate) => safeValue >= candidate.min && safeValue <= candidate.max) ??
+    range.ranges?.find((candidate) => safeValue <= candidate.max) ??
+    range;
+  const snapped = normalizeToStep(safeValue, {
+    min: segment.min,
+    max: segment.max,
+    step: segment.step || range.step || 1,
+  });
+  return clamp(snapped, range.min, range.max);
 }
 
 function writeU16BE(bytes, offset, value) {
@@ -150,14 +196,40 @@ function hitsButtonId(side) {
   return SUPERSTRIKE_HITS_MODEL.buttonIds[side];
 }
 
+function hitsInput(side, key) {
+  return $(`#${side}Hits${HITS_FIELDS[key]}`);
+}
+
+function normalizeHitsValue(key, value) {
+  const range = HITS_RANGES[key];
+  return normalizeToStep(value === "" || value == null ? range.default : value, range);
+}
+
+function selectedHitsValue(side, key) {
+  const input = hitsInput(side, key);
+  const range = HITS_RANGES[key];
+  input.min = String(range.min);
+  input.max = String(range.max);
+  input.step = String(range.step);
+  const value = normalizeHitsValue(key, input.value);
+  input.value = String(value);
+  return value;
+}
+
+function encodeHitsValue(key, value) {
+  const normalized = normalizeHitsValue(key, value);
+  const encoded = key === "rapid" ? normalized * 4 + 1 : normalized * 4;
+  return Math.max(0, Math.min(0xff, Math.round(encoded)));
+}
+
 function hitsSideSettings(side) {
   return {
     side,
     sideIndex: hitsSideIndex(side),
     buttonId: hitsButtonId(side),
-    actuation: Number($(`#${side}HitsActuation`).value),
-    rapid: Number($(`#${side}HitsRapid`).value),
-    haptics: Number($(`#${side}HitsHaptics`).value),
+    actuation: selectedHitsValue(side, "actuation"),
+    rapid: selectedHitsValue(side, "rapid"),
+    haptics: selectedHitsValue(side, "haptics"),
   };
 }
 
@@ -168,6 +240,7 @@ function hitsSettings() {
 function buildHitsSettingsPatch() {
   const settings = hitsSettings();
   return {
+    verifiedGHubRanges: HITS_RANGES,
     targetButtonIds: settings.map((setting) => setting.buttonId),
     analogPreset: {
       actuationPointValues: Object.fromEntries(settings.map((setting) => [setting.buttonId, setting.actuation])),
@@ -186,9 +259,9 @@ function buildCapturedHitsPayload(sideIndex, deviceIndex = activeDeviceIndex()) 
     HITS_FEATURE_INDEX,
     (HITS_WRITE_FUNCTION << 4) | HITS_SOFTWARE_ID,
     sideIndex & 0xff,
-    Math.max(0, Math.min(0xff, actuation * 4)),
-    Math.max(0, Math.min(0xff, rapid * 4 + 1)),
-    Math.max(0, Math.min(0xff, haptics * 4)),
+    encodeHitsValue("actuation", actuation),
+    encodeHitsValue("rapid", rapid),
+    encodeHitsValue("haptics", haptics),
   ]);
   return payload;
 }
@@ -251,7 +324,7 @@ async function openResponsiveDriver(device) {
   for (const deviceIndex of connectionDeviceIndexes(device)) {
     let driver = null;
     try {
-      driver = await LogitechHidpp20Driver.fromDevice(device, { deviceIndex, timeoutMs: 800 });
+      driver = await LogitechHidpp20Driver.fromDevice(device, { deviceIndex, timeoutMs: HIDPP_TIMEOUT_MS.probe });
       const version = await driver.getProtocolVersion();
       const features = await driver.enumerateFeatures();
       if (!hasTargetMouseFeatures(features)) {
@@ -393,12 +466,19 @@ async function withDriver(action, busyText) {
 }
 
 function isRetryableError(error) {
-  return error?.name === "HidppTimeoutError" || /timed out|timeout/i.test(error?.message ?? "");
+  if (!error) return false;
+  if (error.code === HIDPP_INVALID_ARGUMENT || error.frame?.error?.code === HIDPP_INVALID_ARGUMENT) return false;
+  if (error.retryable) return true;
+  const text = `${error.name ?? ""} ${error.message ?? ""}`;
+  return (
+    error.name === "HidppTimeoutError" ||
+    /timed out|timeout|disconnected|device.*closed|failed to open|unable to open|not readable|i\/o/i.test(text)
+  );
 }
 
 async function retryOperation(label, action, options = {}) {
-  const maxAttempts = options.maxAttempts ?? 4;
-  const maxMs = options.maxMs ?? 9000;
+  const maxAttempts = options.maxAttempts ?? 5;
+  const maxMs = options.maxMs ?? 15000;
   const baseDelayMs = options.baseDelayMs ?? 220;
   const started = performance.now();
   let lastError = null;
@@ -443,10 +523,26 @@ async function withOnboardMutation(action, busyText) {
 
 function errorSummary(error) {
   return {
+    name: error.name,
     message: error.message,
     code: error.code,
     frame: error.frame?.hex,
+    attempts: error.attempts,
   };
+}
+
+function retryableSummary(summary) {
+  if (summary?.code === HIDPP_INVALID_ARGUMENT) return false;
+  const text = `${summary?.name ?? ""} ${summary?.message ?? ""}`;
+  return /timed out|timeout|disconnected|device.*closed|failed to open|unable to open|not readable|i\/o/i.test(text);
+}
+
+function createAcknowledgementError(label, attempts) {
+  const error = new Error(`${label} write was not acknowledged`);
+  error.name = "HidppAcknowledgementError";
+  error.retryable = attempts.some((attempt) => retryableSummary(attempt.error));
+  error.attempts = attempts;
+  return error;
 }
 
 function capturedFrameMatcher(deviceIndex, featureIndex, functionId, softwareId) {
@@ -475,7 +571,7 @@ function capturedFeatureMatcher(deviceIndex, featureIndex) {
   };
 }
 
-async function sendCapturedShort(driver, { deviceIndex, featureIndex, functionId, softwareId, params, timeoutMs = 700 }) {
+async function sendCapturedShort(driver, { deviceIndex, featureIndex, functionId, softwareId, params, timeoutMs = HIDPP_TIMEOUT_MS.capturedShort }) {
   const payload = buildShortPayload(deviceIndex, featureIndex, functionId, softwareId, params);
   const response = await driver.rawReport(REPORT.SHORT, payload, {
     waitForAny: true,
@@ -507,7 +603,7 @@ function buildCapturedAdvancedDpiPayload(deviceIndex, softwareId, functionId, se
 
 async function writeCapturedAdvancedDpi(driver, sensorIndex, dpi) {
   const attempts = [];
-  const normalizedDpi = normalizeToStep(dpi, sensorDpiRange(selectedSensor()));
+  const normalizedDpi = normalizeDpiValue(dpi, sensorDpiRange(selectedSensor()));
   for (const deviceIndex of candidateDeviceIndexes(activeDeviceIndex())) {
     const softwareId = softwareIdForDeviceIndex(deviceIndex);
     const setPayload = buildCapturedAdvancedDpiPayload(
@@ -527,13 +623,13 @@ async function writeCapturedAdvancedDpi(driver, sensorIndex, dpi) {
     try {
       await driver.rawReport(REPORT.LONG, setPayload, {
         waitForAny: true,
-        timeoutMs: 550,
+        timeoutMs: HIDPP_TIMEOUT_MS.capturedDpi,
         match: capturedFeatureMatcher(deviceIndex, CAPTURED_ADVANCED_DPI_FEATURE_INDEX),
       });
-      await delay(25);
+      await delay(45);
       await driver.rawReport(REPORT.LONG, commitPayload, {
         waitForAny: true,
-        timeoutMs: 550,
+        timeoutMs: HIDPP_TIMEOUT_MS.capturedDpi,
         match: capturedFeatureMatcher(deviceIndex, CAPTURED_ADVANCED_DPI_FEATURE_INDEX),
       });
       attempts.push({
@@ -556,39 +652,13 @@ async function writeCapturedAdvancedDpi(driver, sensorIndex, dpi) {
       });
     }
   }
-  const fallbackIndex = activeDeviceIndex();
-  const fallbackSoftwareId = softwareIdForDeviceIndex(fallbackIndex);
-  const setPayload = buildCapturedAdvancedDpiPayload(
-    fallbackIndex,
-    fallbackSoftwareId,
-    CAPTURED_ADVANCED_DPI_SET_FUNCTION,
-    sensorIndex,
-    normalizedDpi,
-  );
-  const commitPayload = buildCapturedAdvancedDpiPayload(
-    fallbackIndex,
-    fallbackSoftwareId,
-    CAPTURED_ADVANCED_DPI_COMMIT_FUNCTION,
-    sensorIndex,
-    normalizedDpi,
-  );
-  await driver.rawReport(REPORT.LONG, setPayload);
-  await delay(25);
-  await driver.rawReport(REPORT.LONG, commitPayload);
-  attempts.push({
-    deviceIndex: fallbackIndex,
-    softwareId: fallbackSoftwareId,
-    dpi: normalizedDpi,
-    set: `11 ${bytesToHex(setPayload)}`,
-    commit: `11 ${bytesToHex(commitPayload)}`,
-    acknowledged: false,
-  });
-  return attempts;
+  throw createAcknowledgementError("advanced DPI", attempts);
 }
 
 async function writeSelectedSensorDpi(driver, sensorIndex, dpi) {
   const result = {};
   let appliedToOnboardProfile = false;
+  let appliedToLiveDpi = false;
   if (hasFeature(FEATURE.ONBOARD_PROFILES) && state.onboardDescription?.sectorSize) {
     const profileIndex = selectedProfileIndex();
     try {
@@ -616,6 +686,7 @@ async function writeSelectedSensorDpi(driver, sensorIndex, dpi) {
         lod: sensor?.lod ?? state.extendedDpi?.lod ?? 0x02,
       });
       result.liveAdvanced = "ok";
+      appliedToLiveDpi = true;
     } catch (error) {
       result.liveAdvanced = { error: errorSummary(error) };
     }
@@ -623,6 +694,7 @@ async function writeSelectedSensorDpi(driver, sensorIndex, dpi) {
     try {
       await driver.setSensorDpi(sensorIndex, dpi);
       result.liveStandard = "ok";
+      appliedToLiveDpi = true;
     } catch (error) {
       result.liveStandard = { error: errorSummary(error) };
     }
@@ -632,6 +704,7 @@ async function writeSelectedSensorDpi(driver, sensorIndex, dpi) {
     try {
       await driver.setSensorDpi(sensorIndex, dpi);
       result.standard = "ok";
+      appliedToLiveDpi = true;
     } catch (error) {
       result.standard = { error: errorSummary(error) };
     }
@@ -645,6 +718,7 @@ async function writeSelectedSensorDpi(driver, sensorIndex, dpi) {
         lod: sensor?.lod ?? state.extendedDpi?.lod ?? 0x02,
       });
       result.extendedAdvanced = "ok";
+      appliedToLiveDpi = true;
       try {
         state.extendedDpi = await driver.getExtendedDpi(sensorIndex);
       } catch (error) {
@@ -663,6 +737,17 @@ async function writeSelectedSensorDpi(driver, sensorIndex, dpi) {
     }
   } else if (!appliedToOnboardProfile && !hasFeature(FEATURE.ADJUSTABLE_DPI)) {
     result.capturedAdvanced = await writeCapturedAdvancedDpi(driver, sensorIndex, dpi);
+    appliedToLiveDpi = true;
+  }
+
+  if (!appliedToLiveDpi) {
+    try {
+      result.capturedAdvanced = await writeCapturedAdvancedDpi(driver, sensorIndex, dpi);
+      appliedToLiveDpi = true;
+    } catch (error) {
+      result.capturedAdvanced = { error: errorSummary(error) };
+      if (!appliedToOnboardProfile) throw error;
+    }
   }
 
   if (hasFeature(FEATURE.ADJUSTABLE_DPI)) {
@@ -691,7 +776,7 @@ async function writeCapturedReportRate(driver, channel, ms) {
     try {
       const response = await driver.rawReport(REPORT.SHORT, payload, {
         waitForAny: true,
-        timeoutMs: 650,
+        timeoutMs: HIDPP_TIMEOUT_MS.capturedShort,
         match: capturedFeatureMatcher(deviceIndex, CAPTURED_REPORT_RATE_FEATURE_INDEX),
       });
       return {
@@ -712,27 +797,7 @@ async function writeCapturedReportRate(driver, channel, ms) {
       });
     }
   }
-
-  const fallbackIndex = channelDeviceCandidates(channel, driver)[0] ?? activeDeviceIndex();
-  const fallbackSoftwareId = channel === "wired" ? softwareIdForDeviceIndex(fallbackIndex) : CAPTURED_RECEIVER_SOFTWARE_ID;
-  const fallbackPayload = buildShortPayload(
-    fallbackIndex,
-    CAPTURED_REPORT_RATE_FEATURE_INDEX,
-    CAPTURED_REPORT_RATE_FUNCTION,
-    fallbackSoftwareId,
-    [rate.capturedValue, 0x00, 0x00],
-  );
-  await driver.rawReport(REPORT.SHORT, fallbackPayload);
-  return {
-    channel,
-    ms: rate.ms,
-    hz: rate.hz,
-    deviceIndex: fallbackIndex,
-    softwareId: fallbackSoftwareId,
-    report: `10 ${bytesToHex(fallbackPayload)}`,
-    acknowledged: false,
-    attempts,
-  };
+  throw createAcknowledgementError(`${channel} report rate`, attempts);
 }
 
 async function writeCapturedBhop(driver) {
@@ -750,7 +815,7 @@ async function writeCapturedBhop(driver) {
           functionId: BHOP_WRITE_FUNCTION,
           softwareId,
           params: [encodedTimeout, 0x00, 0x00],
-          timeoutMs: 700,
+          timeoutMs: HIDPP_TIMEOUT_MS.capturedShort,
         });
         return {
           enabled,
@@ -765,24 +830,7 @@ async function writeCapturedBhop(driver) {
       }
     }
   }
-
-  const fallbackIndex = DEFAULT_RECEIVER_DEVICE_INDEX;
-  const payload = buildShortPayload(fallbackIndex, BHOP_FEATURE_INDEX, BHOP_WRITE_FUNCTION, BHOP_SOFTWARE_ID, [
-    encodedTimeout,
-    0x00,
-    0x00,
-  ]);
-  await driver.rawReport(REPORT.SHORT, payload);
-  return {
-    enabled,
-    timeout,
-    encodedTimeout,
-    deviceIndex: fallbackIndex,
-    softwareId: BHOP_SOFTWARE_ID,
-    report: `10 ${bytesToHex(payload)}`,
-    acknowledged: false,
-    attempts,
-  };
+  throw createAcknowledgementError("BHOP", attempts);
 }
 
 function sensorDpiRange(sensor) {
@@ -790,7 +838,7 @@ function sensorDpiRange(sensor) {
   const min = G_HUB_ADVANCED_DPI_RANGE.min;
   const max = Math.max(G_HUB_ADVANCED_DPI_RANGE.max, list[list.length - 1] ?? 0);
   const step = G_HUB_ADVANCED_DPI_RANGE.step;
-  return { list, min, max, step };
+  return { list, min, max, step, ranges: G_HUB_ADVANCED_DPI_RANGE.ranges };
 }
 
 function selectedSensor() {
@@ -800,13 +848,13 @@ function selectedSensor() {
 function selectedSensorDpi() {
   const sensor = selectedSensor();
   const range = sensorDpiRange(sensor);
-  return normalizeToStep($("#sensorDpiInput").value || $("#sensorDpi").value, range);
+  return normalizeDpiValue($("#sensorDpiInput").value || $("#sensorDpi").value, range);
 }
 
 function syncDpiInputs(value) {
   const sensor = selectedSensor();
   const range = sensorDpiRange(sensor);
-  const dpi = normalizeToStep(value, range);
+  const dpi = normalizeDpiValue(value, range);
   $("#sensorDpi").value = String(dpi);
   $("#sensorDpiInput").value = String(dpi);
   if ([...$("#dpiPreset").options].some((option) => option.value === String(dpi))) {
@@ -822,7 +870,8 @@ function renderDpiControls() {
   }
 
   const sensor = selectedSensor();
-  const { list, min, max, step } = sensorDpiRange(sensor);
+  const range = sensorDpiRange(sensor);
+  const { list, min, max, step } = range;
   const slider = $("#sensorDpi");
   const value = sensor.current || sensor.default || list[0] || 1600;
   slider.min = String(min);
@@ -843,7 +892,7 @@ function renderDpiControls() {
     }),
   );
   syncDpiInputs(value);
-  $("#dpiSensorMeta").textContent = `${min}-${max} DPI / ${step} step`;
+  $("#dpiSensorMeta").textContent = `${min}-${max} DPI / ${range.ranges?.length ? "G HUB variable step" : `${step} step`}`;
 }
 
 function renderCapturedDpiControls(advanced = null) {
@@ -861,7 +910,7 @@ function renderCapturedDpiControls(advanced = null) {
     },
   ];
   renderDpiControls();
-  $("#dpiSensorMeta").textContent = `${G_HUB_ADVANCED_DPI_RANGE.min}-${G_HUB_ADVANCED_DPI_RANGE.max} DPI / ${G_HUB_ADVANCED_DPI_RANGE.step} step`;
+  $("#dpiSensorMeta").textContent = `${G_HUB_ADVANCED_DPI_RANGE.min}-${G_HUB_ADVANCED_DPI_RANGE.max} DPI / G HUB variable step`;
 }
 
 async function refreshAdvancedDpiControls(driver) {
@@ -967,21 +1016,36 @@ function renderBhopControls() {
 }
 
 async function refreshConfigurableControls(driver) {
-  if (hasFeature(FEATURE.ADJUSTABLE_DPI)) {
-    state.dpiSensors = await driver.getDpiSensors();
-    renderDpiControls();
-  } else if (hasFeature(FEATURE.ADJUSTABLE_DPI_ADVANCED)) {
-    await refreshAdvancedDpiControls(driver);
+  try {
+    if (hasFeature(FEATURE.ADJUSTABLE_DPI)) {
+      state.dpiSensors = await driver.getDpiSensors();
+      renderDpiControls();
+    } else if (hasFeature(FEATURE.ADJUSTABLE_DPI_ADVANCED)) {
+      await refreshAdvancedDpiControls(driver);
+    }
+  } catch (error) {
+    state.extendedDpi = { error: errorSummary(error) };
+    renderCapturedDpiControls();
+    log("DPI feature read skipped; captured G HUB range is used", errorSummary(error));
   }
   if (hasFeature(FEATURE.ADJUSTABLE_REPORT_RATE)) {
-    const [list, current] = await Promise.all([driver.getReportRateList(), driver.getReportRate()]);
-    const standardRates = mergeReportRates(list.rates.length ? list.rates : STANDARD_REPORT_RATES);
-    state.reportRates = {
-      wired: standardRates,
-      wireless: mergeReportRates(FALLBACK_REPORT_RATES, standardRates),
-    };
-    state.currentReportRate = { wired: current.ms || 1, wireless: current.ms || 1 };
-    renderReportRateControls({ wired: current.ms || 1, wireless: current.ms || 1 });
+    try {
+      const [list, current] = await Promise.all([driver.getReportRateList(), driver.getReportRate()]);
+      const standardRates = mergeReportRates(list.rates.length ? list.rates : STANDARD_REPORT_RATES);
+      state.reportRates = {
+        wired: standardRates,
+        wireless: mergeReportRates(FALLBACK_REPORT_RATES, standardRates),
+      };
+      state.currentReportRate = { wired: current.ms || 1, wireless: current.ms || 1 };
+      renderReportRateControls({ wired: current.ms || 1, wireless: current.ms || 1 });
+    } catch (error) {
+      state.reportRates = {
+        wired: [...STANDARD_REPORT_RATES],
+        wireless: [...FALLBACK_REPORT_RATES],
+      };
+      renderReportRateControls(state.currentReportRate);
+      log("report rate feature read skipped; G HUB verified rates are used", errorSummary(error));
+    }
   } else {
     state.reportRates = {
       wired: [...STANDARD_REPORT_RATES],
@@ -1037,18 +1101,38 @@ async function refreshAll(driver) {
 async function connect() {
   try {
     setStatus("device picker waiting", "busy");
-    const device = await LogitechHidpp20Driver.requestDevice();
+    const device = await LogitechHidpp20Driver.requestDevice({ preferGranted: true });
     renderDevice(device);
     if (state.unsubscribe) state.unsubscribe();
     if (state.driver) await state.driver.close();
+    state.driver = null;
+    state.unsubscribe = null;
 
-    const opened = await openResponsiveDriver(device);
+    const opened = await retryOperation(
+      "connect",
+      async () => {
+        const candidate = await openResponsiveDriver(device);
+        state.driver = candidate.driver;
+        try {
+          await refreshAll(candidate.driver);
+          return candidate;
+        } catch (error) {
+          state.driver = null;
+          try {
+            await candidate.driver.close();
+          } catch {
+            // Ignore close errors while reconnecting.
+          }
+          throw error;
+        }
+      },
+      { maxAttempts: 4, maxMs: 14000, baseDelayMs: 300 },
+    );
     const driver = opened.driver;
     state.driver = driver;
     state.unsubscribe = driver.onReport((frame) => {
       log("report", { raw: frame.hex });
     });
-    await refreshAll(driver);
     setStatus("connected", "ok");
     log("connected", {
       productName: device.productName,
@@ -1072,7 +1156,7 @@ async function writeHitsFrames(driver) {
       try {
         const response = await driver.rawReport(REPORT.LONG, payload, {
           waitForAny: true,
-          timeoutMs: 900,
+          timeoutMs: HIDPP_TIMEOUT_MS.hits,
           match: (frame) => {
             if (!capturedFrameMatcher(deviceIndex, HITS_FEATURE_INDEX, HITS_WRITE_FUNCTION, HITS_SOFTWARE_ID)(frame)) {
               return false;
@@ -1095,7 +1179,10 @@ async function writeHitsFrames(driver) {
         });
       }
     }
-    frames.push(accepted ?? { sideIndex, acknowledged: false, attempts });
+    if (!accepted) {
+      throw createAcknowledgementError(`HITS side ${sideIndex}`, attempts);
+    }
+    frames.push(accepted);
     await delay(40);
   }
   return frames;

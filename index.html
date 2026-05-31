@@ -61,12 +61,12 @@
               </label>
               <label>
                 数値入力
-                <input id="sensorDpiInput" type="number" min="100" max="32000" step="100" value="1600" inputmode="numeric" />
+                <input id="sensorDpiInput" type="number" min="100" max="44000" step="1" value="1600" inputmode="numeric" />
               </label>
             </div>
             <label class="slider-field">
               <span>DPI</span>
-              <input id="sensorDpi" type="range" min="100" max="32000" step="100" value="1600" />
+              <input id="sensorDpi" type="range" min="100" max="44000" step="1" value="1600" />
             </label>
             <div class="panel-footer">
               <span id="dpiSensorMeta" class="setting-meta">-</span>
@@ -164,16 +164,16 @@
               <div class="hit-side-controls">
                 <h3>LEFT</h3>
                 <label class="slider-field hit-slider">
-                  <span><output id="leftActuation">3</output> Actuation</span>
-                  <input id="leftHitsActuation" type="range" min="1" max="10" step="1" value="3" />
+                  <span><output id="leftActuation">5</output> Actuation</span>
+                  <input id="leftHitsActuation" type="range" min="1" max="10" step="1" value="5" />
                 </label>
                 <label class="slider-field hit-slider">
-                  <span><output id="leftRapid">1</output> Rapid</span>
-                  <input id="leftHitsRapid" type="range" min="1" max="5" step="1" value="1" />
+                  <span><output id="leftRapid">2</output> Rapid</span>
+                  <input id="leftHitsRapid" type="range" min="1" max="5" step="1" value="2" />
                 </label>
                 <label class="slider-field hit-slider">
-                  <span><output id="leftHaptics">1</output> Haptics</span>
-                  <input id="leftHitsHaptics" type="range" min="0" max="5" step="1" value="1" />
+                  <span><output id="leftHaptics">3</output> Haptics</span>
+                  <input id="leftHitsHaptics" type="range" min="0" max="5" step="1" value="3" />
                 </label>
               </div>
               <div class="hits-stage">
@@ -182,9 +182,9 @@
                 </div>
                 <div class="hits-mouse-map" aria-label="HITS current settings">
                   <div class="hits-side-summary left" aria-hidden="true">
-                    <span><b id="leftMouseActuation">3</b> AP</span>
-                    <span><b id="leftMouseRapid">1</b> RT</span>
-                    <span><b id="leftMouseHaptics">1</b> HF</span>
+                    <span><b id="leftMouseActuation">5</b> AP</span>
+                    <span><b id="leftMouseRapid">2</b> RT</span>
+                    <span><b id="leftMouseHaptics">3</b> HF</span>
                   </div>
                   <div class="hits-mouse-body" aria-hidden="true">
                     <img class="hits-body-image" src="./src/assets/superstrike-body.png" alt="" />
@@ -192,25 +192,25 @@
                     <span class="hits-button right"></span>
                   </div>
                   <div class="hits-side-summary right" aria-hidden="true">
-                    <span><b id="rightMouseActuation">3</b> AP</span>
-                    <span><b id="rightMouseRapid">1</b> RT</span>
-                    <span><b id="rightMouseHaptics">1</b> HF</span>
+                    <span><b id="rightMouseActuation">5</b> AP</span>
+                    <span><b id="rightMouseRapid">2</b> RT</span>
+                    <span><b id="rightMouseHaptics">3</b> HF</span>
                   </div>
                 </div>
               </div>
               <div class="hit-side-controls">
                 <h3>RIGHT</h3>
                 <label class="slider-field hit-slider">
-                  <span><output id="rightActuation">3</output> Actuation</span>
-                  <input id="rightHitsActuation" type="range" min="1" max="10" step="1" value="3" />
+                  <span><output id="rightActuation">5</output> Actuation</span>
+                  <input id="rightHitsActuation" type="range" min="1" max="10" step="1" value="5" />
                 </label>
                 <label class="slider-field hit-slider">
-                  <span><output id="rightRapid">1</output> Rapid</span>
-                  <input id="rightHitsRapid" type="range" min="1" max="5" step="1" value="1" />
+                  <span><output id="rightRapid">2</output> Rapid</span>
+                  <input id="rightHitsRapid" type="range" min="1" max="5" step="1" value="2" />
                 </label>
                 <label class="slider-field hit-slider">
-                  <span><output id="rightHaptics">1</output> Haptics</span>
-                  <input id="rightHitsHaptics" type="range" min="0" max="5" step="1" value="1" />
+                  <span><output id="rightHaptics">3</output> Haptics</span>
+                  <input id="rightHitsHaptics" type="range" min="0" max="5" step="1" value="3" />
                 </label>
               </div>
             </div>

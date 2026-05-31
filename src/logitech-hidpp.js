@@ -159,9 +159,10 @@ class Hidpp20Transport {
     this.device = device;
     this.deviceIndex = options.deviceIndex ?? 0x01;
     this.softwareId = options.softwareId ?? 0x08;
-    this.timeoutMs = options.timeoutMs ?? 1200;
+    this.timeoutMs = options.timeoutMs ?? 1800;
     this._pending = [];
     this._listeners = new Set();
+    this._listening = false;
     this._handleInputReport = this._handleInputReport.bind(this);
   }
 
@@ -169,11 +170,22 @@ class Hidpp20Transport {
     if (!this.device.opened) {
       await this.device.open();
     }
-    this.device.addEventListener("inputreport", this._handleInputReport);
+    if (!this._listening) {
+      this.device.addEventListener("inputreport", this._handleInputReport);
+      this._listening = true;
+    }
   }
 
   async close() {
-    this.device.removeEventListener("inputreport", this._handleInputReport);
+    if (this._listening) {
+      this.device.removeEventListener("inputreport", this._handleInputReport);
+      this._listening = false;
+    }
+    const closeError = new HidppError("HID++ transport closed");
+    for (const pending of this._pending.splice(0)) {
+      clearTimeout(pending.timer);
+      pending.reject(closeError);
+    }
     if (this.device.opened) {
       await this.device.close();
     }
@@ -352,12 +364,37 @@ class LogitechHidpp20Driver {
     return DEFAULT_FILTERS;
   }
 
+  static matchesFilter(device, filter) {
+    if (filter.vendorId != null && device.vendorId !== filter.vendorId) return false;
+    if (filter.productId != null && device.productId !== filter.productId) return false;
+    return true;
+  }
+
+  static matchesAnyFilter(device, filters = DEFAULT_FILTERS) {
+    return filters.some((filter) => LogitechHidpp20Driver.matchesFilter(device, filter));
+  }
+
   static async requestDevice(options = {}) {
     if (!("hid" in navigator)) {
       throw new Error("WebHID is not available in this browser. Use Chrome, Edge, or another Chromium browser.");
     }
+    const filters = options.filters ?? DEFAULT_FILTERS;
+    if (options.preferGranted !== false && navigator.hid.getDevices) {
+      const grantedFilters = filters.filter((filter) => filter.productId != null);
+      const granted = (await navigator.hid.getDevices()).filter((device) =>
+        LogitechHidpp20Driver.matchesAnyFilter(device, grantedFilters.length ? grantedFilters : filters),
+      );
+      granted.sort((a, b) => {
+        const rank = (device) => {
+          const index = filters.findIndex((filter) => LogitechHidpp20Driver.matchesFilter(device, filter));
+          return index === -1 ? Number.MAX_SAFE_INTEGER : index;
+        };
+        return rank(a) - rank(b);
+      });
+      if (granted.length) return granted[0];
+    }
     const [device] = await navigator.hid.requestDevice({
-      filters: options.filters ?? DEFAULT_FILTERS,
+      filters,
     });
     if (!device) {
       throw new Error("No device selected");
@@ -658,6 +695,16 @@ class LogitechHidpp20Driver {
     });
 
     const written = await this.readOnboardProfile(profileIndex, onboardDescription);
+    const verified = written.resolutions[clampedDpiIndex] === dpi;
+    if (!verified) {
+      throw new HidppError("On-board DPI write verification failed", {
+        profileIndex,
+        dpiIndex: clampedDpiIndex,
+        dpi,
+        before: profile.resolutions,
+        after: written.resolutions,
+      });
+    }
     return {
       profileIndex,
       dpiIndex: clampedDpiIndex,
@@ -665,6 +712,7 @@ class LogitechHidpp20Driver {
       sector: profile.sector,
       before: profile.resolutions,
       after: written.resolutions,
+      verified,
       crc,
     };
   }
@@ -687,6 +735,15 @@ class LogitechHidpp20Driver {
     });
 
     const written = await this.readOnboardProfile(profileIndex, onboardDescription);
+    const verified = written.resolutions.slice(0, 5).every((value) => value === dpi);
+    if (!verified) {
+      throw new HidppError("On-board DPI write verification failed", {
+        profileIndex,
+        dpi,
+        before: profile.resolutions,
+        after: written.resolutions,
+      });
+    }
     return {
       profileIndex,
       dpiIndexes: [0, 1, 2, 3, 4],
@@ -694,6 +751,7 @@ class LogitechHidpp20Driver {
       sector: profile.sector,
       before: profile.resolutions,
       after: written.resolutions,
+      verified,
       crc,
     };
   }
