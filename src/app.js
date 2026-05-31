@@ -201,6 +201,9 @@ function renderHitsModel() {
     setOutput(`#${side}Actuation`, actuation);
     setOutput(`#${side}Rapid`, rapid);
     setOutput(`#${side}Haptics`, haptics);
+    setOutput(`#${side}MouseActuation`, actuation);
+    setOutput(`#${side}MouseRapid`, rapid);
+    setOutput(`#${side}MouseHaptics`, haptics);
     $(`#${side}ApLine`).style.setProperty("--ap-position", `${clamp(actuation, 1, 10) * 10}%`);
   }
 }
@@ -240,6 +243,16 @@ function handleHitsPressureFrame(frame) {
   }
   const pressure = parseHitsPressureFrame(frame);
   renderHitsPressure(pressure.raw, pressure.side);
+  log("HITS pressure frame", {
+    parsed: pressure,
+    reportId: frame.reportId,
+    deviceIndex: frame.deviceIndex,
+    featureIndex: frame.featureIndex,
+    functionId: frame.functionId,
+    softwareId: frame.softwareId,
+    parameters: bytesToHex(frame.parameters),
+    raw: frame.hex,
+  });
   return true;
 }
 
