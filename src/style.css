@@ -72,6 +72,12 @@ select {
   color: var(--text);
 }
 
+input:disabled,
+select:disabled {
+  cursor: not-allowed;
+  opacity: 0.42;
+}
+
 input[type="range"] {
   min-height: 26px;
   padding: 0;
@@ -476,6 +482,12 @@ input[type="number"] {
 .hit-slider output {
   color: #ffffff;
   font-size: 18px;
+}
+
+.hits-toggle {
+  width: max-content;
+  min-height: 42px;
+  margin: -4px 0 16px;
 }
 
 .panel-description {

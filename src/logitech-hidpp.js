@@ -161,7 +161,6 @@ class Hidpp20Transport {
     this.softwareId = options.softwareId ?? 0x08;
     this.timeoutMs = options.timeoutMs ?? 1800;
     this._pending = [];
-    this._listeners = new Set();
     this._listening = false;
     this._handleInputReport = this._handleInputReport.bind(this);
   }
@@ -191,17 +190,9 @@ class Hidpp20Transport {
     }
   }
 
-  onReport(listener) {
-    this._listeners.add(listener);
-    return () => this._listeners.delete(listener);
-  }
-
   _handleInputReport(event) {
     const report = normalizeIncomingReport(event.reportId, event.data);
     const frame = this._parseFrame(report);
-    for (const listener of this._listeners) {
-      listener(frame);
-    }
 
     const index = this._pending.findIndex((pending) => pending.match(frame));
     if (index === -1) return;
@@ -425,10 +416,6 @@ class LogitechHidpp20Driver {
 
   get productId() {
     return this.transport.device?.productId;
-  }
-
-  onReport(listener) {
-    return this.transport.onReport(listener);
   }
 
   async close() {

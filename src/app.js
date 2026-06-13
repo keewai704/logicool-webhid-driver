@@ -42,6 +42,13 @@ const FALLBACK_REPORT_RATES = Object.freeze([
   { ms: 8, hz: 125, capturedValue: 0x00 },
 ]);
 const STANDARD_REPORT_RATES = Object.freeze(FALLBACK_REPORT_RATES.filter((rate) => rate.ms >= 1));
+const G_HUB_DEFAULT_DPI_TABLE = Object.freeze([800, 1200, 1600, 2400, 3200]);
+const G_HUB_DEFAULT_DPI = 800;
+const G_HUB_DEFAULT_RAPID_TRIGGER_ENABLED = false;
+const G_HUB_DEFAULT_BHOP = Object.freeze({
+  enabled: true,
+  timeout: 100,
+});
 const CAPTURED_ADVANCED_DPI_FEATURE_INDEX = 0x09;
 const CAPTURED_ADVANCED_DPI_SET_FUNCTION = 0x06;
 const CAPTURED_ADVANCED_DPI_COMMIT_FUNCTION = 0x07;
@@ -76,7 +83,6 @@ const HITS_FIELDS = Object.freeze({
 
 const state = {
   driver: null,
-  unsubscribe: null,
   features: [],
   onboardDescription: null,
   onboardProfiles: [],
@@ -92,8 +98,7 @@ const state = {
     wireless: 1,
   },
   bhop: {
-    enabled: false,
-    timeout: 100,
+    ...G_HUB_DEFAULT_BHOP,
   },
   extendedDpi: null,
 };
@@ -107,7 +112,7 @@ const SUPERSTRIKE_HITS_MODEL = Object.freeze({
     featureIndex: "0x0c",
     functionId: "0x1",
     softwareId: "0xd",
-    hitsTemplate: "11 01 0c 1d <side:00|01> <actuation*4> <rapid*4+enabled> <haptics*4> 00...",
+    hitsTemplate: "11 01 0c 1d <side:00|01> <actuation*4> <rapid*4+enabledBit> <haptics*4> 00...",
   },
 });
 
@@ -200,6 +205,18 @@ function hitsInput(side, key) {
   return $(`#${side}Hits${HITS_FIELDS[key]}`);
 }
 
+function hitsRapidEnabled() {
+  return $("#rapidTriggerEnabled")?.checked ?? G_HUB_DEFAULT_RAPID_TRIGGER_ENABLED;
+}
+
+function syncHitsInputState() {
+  const enabled = hitsRapidEnabled();
+  for (const side of ["left", "right"]) {
+    hitsInput(side, "rapid").disabled = !enabled;
+  }
+  return enabled;
+}
+
 function normalizeHitsValue(key, value) {
   const range = HITS_RANGES[key];
   return normalizeToStep(value === "" || value == null ? range.default : value, range);
@@ -216,18 +233,20 @@ function selectedHitsValue(side, key) {
   return value;
 }
 
-function encodeHitsValue(key, value) {
+function encodeHitsValue(key, value, options = {}) {
   const normalized = normalizeHitsValue(key, value);
-  const encoded = key === "rapid" ? normalized * 4 + 1 : normalized * 4;
+  const encoded = key === "rapid" ? normalized * 4 + (options.enabled ? 1 : 0) : normalized * 4;
   return Math.max(0, Math.min(0xff, Math.round(encoded)));
 }
 
 function hitsSideSettings(side) {
+  const rapidEnabled = hitsRapidEnabled();
   return {
     side,
     sideIndex: hitsSideIndex(side),
     buttonId: hitsButtonId(side),
     actuation: selectedHitsValue(side, "actuation"),
+    rapidEnabled,
     rapid: selectedHitsValue(side, "rapid"),
     haptics: selectedHitsValue(side, "haptics"),
   };
@@ -239,12 +258,15 @@ function hitsSettings() {
 
 function buildHitsSettingsPatch() {
   const settings = hitsSettings();
+  const targetButtonIds = settings.map((setting) => setting.buttonId);
+  const rapidEnabled = hitsRapidEnabled();
   return {
     verifiedGHubRanges: HITS_RANGES,
-    targetButtonIds: settings.map((setting) => setting.buttonId),
+    targetButtonIds,
     analogPreset: {
+      rapidTriggerEnabled: rapidEnabled,
       actuationPointValues: Object.fromEntries(settings.map((setting) => [setting.buttonId, setting.actuation])),
-      rapidTriggerExplicitStates: settings.map((setting) => setting.buttonId),
+      rapidTriggerExplicitStates: rapidEnabled ? targetButtonIds : [],
       rapidTriggerValues: Object.fromEntries(settings.map((setting) => [setting.buttonId, setting.rapid])),
       clickHapticsValues: Object.fromEntries(settings.map((setting) => [setting.buttonId, setting.haptics])),
     },
@@ -252,7 +274,7 @@ function buildHitsSettingsPatch() {
 }
 
 function buildCapturedHitsPayload(sideIndex, deviceIndex = activeDeviceIndex()) {
-  const { actuation, rapid, haptics } = hitsSideSettings(hitsSideFromIndex(sideIndex));
+  const { actuation, rapidEnabled, rapid, haptics } = hitsSideSettings(hitsSideFromIndex(sideIndex));
   const payload = new Uint8Array(19);
   payload.set([
     deviceIndex,
@@ -260,19 +282,20 @@ function buildCapturedHitsPayload(sideIndex, deviceIndex = activeDeviceIndex()) 
     (HITS_WRITE_FUNCTION << 4) | HITS_SOFTWARE_ID,
     sideIndex & 0xff,
     encodeHitsValue("actuation", actuation),
-    encodeHitsValue("rapid", rapid),
+    encodeHitsValue("rapid", rapid, { enabled: rapidEnabled }),
     encodeHitsValue("haptics", haptics),
   ]);
   return payload;
 }
 
 function renderHitsModel() {
+  const rapidEnabled = syncHitsInputState();
   for (const { side, actuation, rapid, haptics } of hitsSettings()) {
     setOutput(`#${side}Actuation`, actuation);
-    setOutput(`#${side}Rapid`, rapid);
+    setOutput(`#${side}Rapid`, rapidEnabled ? rapid : "OFF");
     setOutput(`#${side}Haptics`, haptics);
     setOutput(`#${side}MouseActuation`, actuation);
-    setOutput(`#${side}MouseRapid`, rapid);
+    setOutput(`#${side}MouseRapid`, rapidEnabled ? rapid : "OFF");
     setOutput(`#${side}MouseHaptics`, haptics);
   }
 }
@@ -896,14 +919,15 @@ function renderDpiControls() {
 }
 
 function renderCapturedDpiControls(advanced = null) {
-  const current = advanced?.current || selectedSensorDpi() || 1600;
+  const previousDpi = state.dpiSensors.length ? selectedSensorDpi() : null;
+  const current = advanced?.current || previousDpi || G_HUB_DEFAULT_DPI;
   state.dpiSensors = [
     {
       index: advanced?.sensorIndex ?? 0,
-      list: [400, 800, 1600, 3200, 4800, 6400],
+      list: [...G_HUB_DEFAULT_DPI_TABLE],
       step: G_HUB_ADVANCED_DPI_RANGE.step,
       current,
-      default: advanced?.default || 1600,
+      default: advanced?.default || G_HUB_DEFAULT_DPI,
       lod: advanced?.lod ?? 0x02,
       y: advanced?.y || current,
       capturedAdvanced: true,
@@ -1103,10 +1127,8 @@ async function connect() {
     setStatus("device picker waiting", "busy");
     const device = await LogitechHidpp20Driver.requestDevice({ preferGranted: true });
     renderDevice(device);
-    if (state.unsubscribe) state.unsubscribe();
     if (state.driver) await state.driver.close();
     state.driver = null;
-    state.unsubscribe = null;
 
     const opened = await retryOperation(
       "connect",
@@ -1130,9 +1152,6 @@ async function connect() {
     );
     const driver = opened.driver;
     state.driver = driver;
-    state.unsubscribe = driver.onReport((frame) => {
-      log("report", { raw: frame.hex });
-    });
     setStatus("connected", "ok");
     log("connected", {
       productName: device.productName,
@@ -1268,6 +1287,7 @@ $("#bhopEnabled").addEventListener("change", () => syncBhopInputs());
 $("#bhopTimeout").addEventListener("input", () => syncBhopInputs($("#bhopTimeout").value));
 $("#bhopTimeoutInput").addEventListener("input", () => syncBhopInputs($("#bhopTimeoutInput").value));
 $("#bhopTimeoutInput").addEventListener("change", () => syncBhopInputs($("#bhopTimeoutInput").value));
+$("#rapidTriggerEnabled").addEventListener("change", renderHitsModel);
 
 if (!("hid" in navigator)) {
   setStatus("WebHID 非対応ブラウザです。Chrome/Edge/Vivaldi の localhost で開いてください。", "error");
