@@ -318,6 +318,22 @@ function renderDevice(device) {
   $("#deviceIds").textContent = `${hex(device.vendorId, 4)}:${hex(device.productId, 4)}`;
 }
 
+function webHidInterfaceSummary(device) {
+  return {
+    productName: device.productName || "Logitech HID device",
+    vendorId: hex(device.vendorId, 4),
+    productId: hex(device.productId, 4),
+    interfaceScore: LogitechHidpp20Driver.deviceInterfaceScore(device),
+    collections: [...(device.collections ?? [])].map((collection) => ({
+      usagePage: hex(collection.usagePage, 4),
+      usage: hex(collection.usage, 4),
+      inputReports: LogitechHidpp20Driver.reportCollectionSize(collection.inputReports),
+      outputReports: LogitechHidpp20Driver.reportCollectionSize(collection.outputReports),
+      featureReports: LogitechHidpp20Driver.reportCollectionSize(collection.featureReports),
+    })),
+  };
+}
+
 function hasFeature(featureId) {
   return state.features.some((feature) => feature.id === featureId);
 }
@@ -375,6 +391,28 @@ async function openResponsiveDriver(device) {
     }
   }
   const error = new Error("HID++ 2.0 mouse interface was not found on this WebHID device");
+  error.attempts = attempts;
+  throw error;
+}
+
+async function openResponsiveDriverFromDevices(devices) {
+  const attempts = [];
+  for (const device of devices) {
+    try {
+      const candidate = await openResponsiveDriver(device);
+      return {
+        ...candidate,
+        device,
+        attempts: [...attempts, ...candidate.attempts],
+      };
+    } catch (error) {
+      attempts.push({
+        device: webHidInterfaceSummary(device),
+        attempts: error.attempts ?? [errorSummary(error)],
+      });
+    }
+  }
+  const error = new Error("HID++ 2.0 mouse interface was not found on the selected WebHID interfaces");
   error.attempts = attempts;
   throw error;
 }
@@ -1125,15 +1163,14 @@ async function refreshAll(driver) {
 async function connect() {
   try {
     setStatus("device picker waiting", "busy");
-    const device = await LogitechHidpp20Driver.requestDevice({ preferGranted: true });
-    renderDevice(device);
+    const devices = await LogitechHidpp20Driver.requestDevices({ preferGranted: true });
     if (state.driver) await state.driver.close();
     state.driver = null;
 
     const opened = await retryOperation(
       "connect",
       async () => {
-        const candidate = await openResponsiveDriver(device);
+        const candidate = await openResponsiveDriverFromDevices(devices);
         state.driver = candidate.driver;
         try {
           await refreshAll(candidate.driver);
@@ -1152,11 +1189,11 @@ async function connect() {
     );
     const driver = opened.driver;
     state.driver = driver;
+    renderDevice(opened.device);
     setStatus("connected", "ok");
     log("connected", {
-      productName: device.productName,
-      vendorId: device.vendorId,
-      productId: device.productId,
+      device: webHidInterfaceSummary(opened.device),
+      grantedInterfaces: devices.map(webHidInterfaceSummary),
       probeAttempts: opened.attempts,
     });
   } catch (error) {

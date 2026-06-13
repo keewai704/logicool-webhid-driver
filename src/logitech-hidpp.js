@@ -365,7 +365,45 @@ class LogitechHidpp20Driver {
     return filters.some((filter) => LogitechHidpp20Driver.matchesFilter(device, filter));
   }
 
-  static async requestDevice(options = {}) {
+  static reportCollectionSize(reports) {
+    return reports?.size ?? reports?.length ?? 0;
+  }
+
+  static deviceInterfaceScore(device) {
+    let score = 20;
+    for (const collection of device?.collections ?? []) {
+      const vendorDefined = collection.usagePage >= 0xff00;
+      const hasOutput =
+        LogitechHidpp20Driver.reportCollectionSize(collection.outputReports) > 0 ||
+        LogitechHidpp20Driver.reportCollectionSize(collection.featureReports) > 0;
+      const hasInput = LogitechHidpp20Driver.reportCollectionSize(collection.inputReports) > 0;
+      if (vendorDefined && hasOutput) score = Math.min(score, 0);
+      else if (hasOutput) score = Math.min(score, 1);
+      else if (vendorDefined && hasInput) score = Math.min(score, 2);
+      else if (hasInput) score = Math.min(score, 8);
+    }
+    return score;
+  }
+
+  static sortDevices(devices, filters = DEFAULT_FILTERS) {
+    return [...devices].sort((a, b) => {
+      const rank = (device) => {
+        const index = filters.findIndex((filter) => LogitechHidpp20Driver.matchesFilter(device, filter));
+        return index === -1 ? Number.MAX_SAFE_INTEGER : index;
+      };
+      return (
+        rank(a) - rank(b) ||
+        LogitechHidpp20Driver.deviceInterfaceScore(a) - LogitechHidpp20Driver.deviceInterfaceScore(b) ||
+        (a.productId ?? 0) - (b.productId ?? 0)
+      );
+    });
+  }
+
+  static uniqueDevices(devices) {
+    return [...new Set(devices)];
+  }
+
+  static async requestDevices(options = {}) {
     if (!("hid" in navigator)) {
       throw new Error("WebHID is not available in this browser. Use Chrome, Edge, or another Chromium browser.");
     }
@@ -375,21 +413,24 @@ class LogitechHidpp20Driver {
       const granted = (await navigator.hid.getDevices()).filter((device) =>
         LogitechHidpp20Driver.matchesAnyFilter(device, grantedFilters.length ? grantedFilters : filters),
       );
-      granted.sort((a, b) => {
-        const rank = (device) => {
-          const index = filters.findIndex((filter) => LogitechHidpp20Driver.matchesFilter(device, filter));
-          return index === -1 ? Number.MAX_SAFE_INTEGER : index;
-        };
-        return rank(a) - rank(b);
-      });
-      if (granted.length) return granted[0];
+      if (granted.length) return LogitechHidpp20Driver.sortDevices(granted, filters);
     }
-    const [device] = await navigator.hid.requestDevice({
-      filters,
-    });
-    if (!device) {
+
+    const selected = await navigator.hid.requestDevice({ filters });
+    let devices = selected.filter((device) => LogitechHidpp20Driver.matchesAnyFilter(device, filters));
+    if (navigator.hid.getDevices) {
+      const granted = (await navigator.hid.getDevices()).filter((device) => LogitechHidpp20Driver.matchesAnyFilter(device, filters));
+      devices = LogitechHidpp20Driver.uniqueDevices([...devices, ...granted]);
+    }
+    devices = LogitechHidpp20Driver.sortDevices(devices, filters);
+    if (!devices.length) {
       throw new Error("No device selected");
     }
+    return devices;
+  }
+
+  static async requestDevice(options = {}) {
+    const [device] = await LogitechHidpp20Driver.requestDevices(options);
     return device;
   }
 
